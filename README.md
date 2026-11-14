@@ -1,18 +1,20 @@
 # ☀ OneSun Code
 
-ИИ-агент для программирования прямо в терминале — интерфейс в стиле Claude Code.
-Ты вставляешь свой API-ключ, выбираешь нейросеть, и агент читает твой проект, правит файлы и запускает команды (с твоего разрешения).
+**English** · [Русская версия](README.ru.md)
 
-Поддерживаются: **Claude, Google Gemini (в том числе Gemini 4), OpenAI, DeepSeek, OpenRouter** и любой OpenAI-совместимый API.
+An AI coding agent right in your terminal, with an interface in the style of Claude Code.
+You paste your own API key, pick a model, and the agent reads your project, edits files and runs commands (with your permission).
 
-## Установка (Windows)
+Supported: **Claude, Google Gemini (including Gemini 4), OpenAI, DeepSeek, OpenRouter** and any OpenAI-compatible API.
 
-Нужны два бесплатных инструмента:
+## Install (Windows)
 
-1. **Node.js 18 или новее** — https://nodejs.org (кнопка LTS)
+You need two free tools:
+
+1. **Node.js 18 or newer** — https://nodejs.org (the LTS button)
 2. **Git** — https://git-scm.com
 
-Затем открой PowerShell или Windows Terminal и введи:
+Then open PowerShell, cmd or Windows Terminal and run:
 
 ```
 git clone https://github.com/DimazikYTBR/OneSun-Code.git
@@ -20,87 +22,100 @@ cd OneSun-Code
 npm link
 ```
 
-(Вместо `npm link` можно просто дважды кликнуть по `install.bat`.)
+(Instead of `npm link` you can double-click `install.bat`.)
 
-## Запуск
+## Run
 
-Перейди в папку своего проекта и введи команду:
+Go to your project folder and run the command:
 
 ```
 cd C:\Projects\my-game
 onesun
 ```
 
-### Первый запуск
+### First run
 
-Если API-ключ или модель не указаны, программа **сама откроет файл `config.txt` в Блокноте**.
-Впиши ключ и модель после знака `=`, сохрани файл (Ctrl+S), вернись в терминал и нажми Enter — всё запустится.
+1. **Language.** The first time, you are asked to pick a language (English is the default; arrows + Enter, or press `1` / `2`). Change it any time with `/lang`.
+2. **Settings.** If the API key or model is missing, the program **opens `config.txt` in Notepad by itself**.
+   Type the values after the `=` sign, save the file (Ctrl+S), come back to the terminal and press Enter.
 
 ```
 PROVIDER=gemini
-API_KEY=твой-ключ
+API_KEY=your-key-here
 MODEL=gemini-4-argon
 ```
 
-Файл `config.txt` лежит в папке OneSun-Code (его создаёт программа из `config.example.txt`) и не попадает в GitHub, поэтому ключ не утечёт.
-Изменить настройки позже: команда `/config` внутри программы или `onesun --config`.
+`config.txt` lives in the OneSun-Code folder. The program creates it from `config.example.txt` and it is not uploaded to GitHub, so your key stays private.
+Change settings later with `/config` inside the program or `onesun --config`.
 
-## Как пользоваться
+### Your settings are never reset
 
-Пиши задачу обычным языком:
+- `config.txt` is created **only if it does not exist**. An existing file is never overwritten, not by the program and not by updates (`git pull`).
+- If your config is from an older version and has no language yet, you are asked once and only the line `LANG=...` is **appended** to the end of the file. Everything else stays byte for byte.
+- `/model`, `/provider` and `/lang` change only their own line.
+- Do not upload `config.txt` to GitHub by hand (for example with “Upload files”): it contains your key.
+
+## Using it
+
+Write the task in plain language:
 
 ```
-> найди, почему не работает вход, и исправь
-> добавь в бота команду /stats
-> создай index.html с игрой «Змейка»
+> find out why login doesn't work and fix it
+> add a /stats command to the bot
+> create index.html with a Snake game
 ```
 
-| Команда | Что делает |
+While the agent is thinking, a shimmering status line is shown (white text with a blue wave running through it) and the phrase changes every few seconds (“Thinking”, “Catching rays”, “Brewing”…).
+
+| Command | What it does |
 |---|---|
-| `/help` | список команд |
-| `/config` | открыть config.txt |
-| `/model имя` | сменить модель |
-| `/provider имя` | сменить провайдера |
-| `/mode` или **Shift+Tab** | режим разрешений |
-| `/clear` | очистить диалог |
-| `/exit` или Ctrl+C дважды | выход |
-| **Esc** | прервать работу агента |
+| `/help` | list of commands |
+| `/config` | open config.txt |
+| `/model name` | change the model |
+| `/provider name` | change the provider |
+| `/lang` | change the language (English / Русский) |
+| `/mode` or **Shift+Tab** | permission mode |
+| `/clear` | clear the conversation |
+| `/exit` or Ctrl+C twice | quit |
+| **Esc** | interrupt the agent |
 
-Можно сразу дать задачу: `onesun "добавь README"`.
-Перенос строки — `\` в конце строки. Вставка многострочного текста работает как есть.
+You can give a task right away: `onesun "add a README"`.
+Line break: `\` at the end of a line. Pasting multi-line text works as is.
 
-### Закреплённая шапка
+### Permission modes
 
-Логотип OneSun и название OneSun Code (вместе с провайдером, моделью и папкой проекта) закреплены вверху экрана и не уезжают при прокрутке диалога. Шапка обновляется при смене модели.
-Если окно терминала слишком маленькое (меньше 18 строк), шапка не показывается сама.
-Недостаток: старые сообщения нельзя вернуть колесом мыши, они уходят за верхнюю границу области диалога. Если это мешает, поставь в `config.txt` строку `HEADER=off`.
+- **ask permissions** (default) — before editing a file or running a command it shows exactly what it is about to do and asks: Yes / Yes, don't ask again / No;
+- **edits without asking** — files are edited automatically, commands still ask;
+- **everything without asking** — the agent does everything itself. Use with care.
 
-### Режимы разрешений
+Reading files inside the project folder needs no permission. Reading outside the folder asks.
 
-- **спрашивать разрешения** (по умолчанию) — перед правкой файла и запуском команды покажет, что именно собирается сделать, и спросит: Да / Да, больше не спрашивать / Нет;
-- **правки без вопросов** — файлы правятся сами, команды спрашивают;
-- **всё без вопросов** — агент делает всё сам. Используй осторожно.
+### Pinned header
 
-Чтение файлов внутри папки проекта разрешений не требует. Чтение вне папки — спрашивает.
+The OneSun logo and name (plus provider, model and project folder) are pinned to the top of the screen and do not scroll away. The header updates when you change the model.
+If the terminal window is too small (under 18 rows), the header is skipped automatically.
+Downside: the mouse wheel cannot bring back old messages that scrolled past the top of the conversation area. If that bothers you, put `HEADER=off` in `config.txt`.
 
-### Инструкции для проекта
+### Project instructions
 
-Создай в папке проекта файл `ONESUN.md` — агент прочитает его при каждом запуске (стиль кода, как запускать тесты и т.п.).
+Create a file named `ONESUN.md` in your project folder — the agent reads it on every start (code style, how to run tests, etc.).
 
-## Если API заблокирован
+## If the API is blocked
 
-Из некоторых стран прямой доступ к Claude, OpenAI или Google недоступен. Варианты:
+In some countries Claude, OpenAI or Google are not reachable directly. Options:
 
-- взять ключ **OpenRouter** (`PROVIDER=openrouter`) или **DeepSeek** (`PROVIDER=deepseek`);
-- указать адрес прокси/зеркала в `BASE_URL=` — он работает для любого провайдера.
+- get an **OpenRouter** key (`PROVIDER=openrouter`) or a **DeepSeek** key (`PROVIDER=deepseek`);
+- put the address of a proxy/mirror into `BASE_URL=` — it works for any provider.
 
-## Обновление
+## Update
 
 ```
 cd OneSun-Code
 git pull
 ```
 
-## Если символы выглядят криво
+If `git pull` complains about “local changes” in a file, run `git restore <file>` and pull again. Your `config.txt` is not part of the repository and stays untouched.
 
-Лучше всего работает **Windows Terminal** (в Windows 11 он стоит по умолчанию). В старой консоли программа сама переключается на простые символы; принудительно: `set ONESUN_ASCII=1`.
+## If the symbols look broken
+
+**Windows Terminal** works best (it is the default in Windows 11). In the old console the program switches to plain symbols by itself; to force it: `set ONESUN_ASCII=1`.
