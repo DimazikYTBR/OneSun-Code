@@ -1,22 +1,27 @@
 # ============================================================
-#  OneSun Code — настройки
-#  Впиши значения после знака «=» и сохрани файл (Ctrl+S).
-#  Строки, которые начинаются с #, — комментарии, их можно не трогать.
+#  OneSun Code — settings
+#  Type the values after the "=" sign and save the file (Ctrl+S).
+#  Lines starting with # are comments, you can leave them alone.
+#  This file is yours: updates (git pull) never overwrite it.
 # ============================================================
 
-# Провайдер нейросети. Варианты:
-#   anthropic   — Claude
-#   gemini      — Google Gemini
-#   openai      — OpenAI (GPT)
-#   deepseek    — DeepSeek
-#   openrouter  — OpenRouter (десятки моделей через один ключ)
-#   custom      — любой OpenAI-совместимый API (тогда заполни BASE_URL)
+# Interface language: en (English) or ru (Русский).
+# Change it here or with the /lang command inside the program.
+LANG=en
+
+# AI provider. Options:
+#   anthropic   - Claude
+#   gemini      - Google Gemini
+#   openai      - OpenAI (GPT)
+#   deepseek    - DeepSeek
+#   openrouter  - OpenRouter (dozens of models with one key)
+#   custom      - any OpenAI-compatible API (then also fill in BASE_URL)
 PROVIDER=anthropic
 
-# Твой API-ключ выбранного провайдера
+# Your API key for the chosen provider
 API_KEY=
 
-# Название модели. Примеры:
+# Model name. Examples:
 #   anthropic:  claude-sonnet-5-5 | claude-opus-5-5 | claude-haiku-5-5
 #   gemini:     gemini-4-argon | gemini-4-carbon | gemini-4-hydrogen | gemini-3.8-flash
 #   openai:     gpt-4.1 | gpt-4o | o4-mini
@@ -24,25 +29,25 @@ API_KEY=
 #   openrouter: google/gemini-4-carbon | openai/gpt-4o
 MODEL=
 
-# Нужен только для PROVIDER=custom, либо если ходишь через прокси/зеркало.
-# Пример: https://my-proxy.example.com/v1
+# Needed only for PROVIDER=custom, or if you go through a proxy/mirror.
+# Example: https://my-proxy.example.com/v1
 BASE_URL=
 
-# Режим разрешений при запуске:
-#   ask   — спрашивать перед правкой файлов и запуском команд (рекомендуется)
-#   edits — файлы правятся без вопросов, команды спрашивают
-#   yolo  — всё без вопросов (осторожно!)
+# Permission mode at startup:
+#   ask   - ask before editing files and running commands (recommended)
+#   edits - files are edited without asking, commands still ask
+#   yolo  - everything without asking (careful!)
 MODE=ask
 
-# Закреплённая шапка с логотипом и названием (on — включена, off — выключена).
-# При включённой шапке колесо мыши не прокручивает старые сообщения за верх экрана;
-# если это мешает, поставь off.
+# Pinned header with the logo and name (on / off).
+# While the header is on, the mouse wheel cannot scroll old messages above the top
+# of the conversation area; if that bothers you, set off.
 HEADER=on
 
 # ------------------------------------------------------------
-# Если пользуешься несколькими провайдерами, можно хранить
-# отдельный ключ для каждого (раскомментируй нужные строки,
-# убрав # в начале). Они главнее, чем API_KEY.
+# If you use several providers, you can keep a separate key for
+# each one (remove the # at the start of the lines you need).
+# They take priority over API_KEY.
 # ------------------------------------------------------------
 # ANTHROPIC_API_KEY=
 # GEMINI_API_KEY=
