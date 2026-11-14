@@ -60,7 +60,7 @@ function loadConfig() {
   const provider = (raw.PROVIDER || 'anthropic').toLowerCase();
   const key = raw[provider.toUpperCase() + '_API_KEY'] || raw.API_KEY || '';
   const mode = MODES.includes((raw.MODE || '').toLowerCase()) ? raw.MODE.toLowerCase() : 'ask';
-  return { provider, key, model: raw.MODEL || '', baseUrl: raw.BASE_URL || '', mode };
+  return { provider, key, model: raw.MODEL || '', baseUrl: raw.BASE_URL || '', mode, header: (raw.HEADER || 'on').toLowerCase() !== 'off' };
 }
 
 function missingFields(cfg) {
@@ -132,7 +132,69 @@ function box(lines) {
   out(C.orange + S.bl + S.h.repeat(w) + S.br + C.reset + '\n');
 }
 
+// ---------- закреплённая шапка (логотип и название) ----------
+const HDR_LINES = 4;
+let headerOn = false;
+
+function headerLines() {
+  const w = cols();
+  const R = C.orange, Y = ansi('\x1b[1;38;5;220m');
+  const core = FANCY ? '●' : 'O';
+  const sun = [
+    `${R}  \\ | /  ${C.reset}`,
+    `${R} -- ${Y}${core}${R} -- ${C.reset}`,
+    `${R}  / | \\  ${C.reset}`,
+  ];
+  const max = w - 14;
+  const info = [
+    `${C.bold}${C.orange}OneSun Code${C.reset} ${C.gray}v${pkg.version}${C.reset}`,
+    `${C.gray}${clipTo(state.cfg.provider + ' · ' + state.cfg.model, max)}${C.reset}`,
+    `${C.gray}${clipTo(process.cwd(), max)}${C.reset}`,
+  ];
+  const lines = sun.map((l, i) => l + '  ' + info[i]);
+  lines.push(`${C.gray}${S.h.repeat(w - 1)}${C.reset}`);
+  return lines;
+}
+
+function drawHeader() {
+  if (!headerOn) return;
+  out('\x1b7');
+  headerLines().forEach((l, i) => out(`\x1b[${i + 1};1H\x1b[2K${l}`));
+  out('\x1b8');
+}
+
+function enableHeader() {
+  const rows = process.stdout.rows || 0;
+  if (state.cfg.header === false || rows < 14 || cols() < 50) return;
+  headerOn = true;
+  out('\x1b[2J');
+  out(`\x1b[${HDR_LINES + 1};${rows}r`); // прокручивается только область под шапкой
+  out(`\x1b[${HDR_LINES + 1};1H`);
+  drawHeader();
+}
+
+function disableHeader() {
+  if (!headerOn) return;
+  headerOn = false;
+  out('\x1b7\x1b[r\x1b8');
+}
+
+process.stdout.on('resize', () => {
+  if (!headerOn) return;
+  const rows = process.stdout.rows || 0;
+  if (rows < 14) { disableHeader(); return; }
+  out('\x1b7');
+  out(`\x1b[${HDR_LINES + 1};${rows}r`);
+  out('\x1b8');
+  drawHeader();
+});
+
 function banner() {
+  if (headerOn) {
+    out(`${C.orange}${S.star}${C.reset} ${C.bold}Добро пожаловать в OneSun Code!${C.reset}\n`);
+    out(`${C.gray}  /help — команды · /config — ключ и модель · Esc — прервать · Shift+Tab — режим${C.reset}\n`);
+    return;
+  }
   const max = cols() - 12;
   box([
     `${C.orange}${S.star}${C.reset} ${C.bold}Добро пожаловать в OneSun Code${C.reset} ${C.gray}v${pkg.version}${C.reset}`,
@@ -183,7 +245,7 @@ function spinStop() {
   spin.on = false;
   out('\r\x1b[2K\x1b[?25h');
 }
-process.on('exit', () => { try { if (process.stdout.isTTY) out('\x1b[?25h'); } catch { /* ignore */ } });
+process.on('exit', () => { try { if (process.stdout.isTTY) { out('\x1b[?25h'); disableHeader(); } } catch { /* ignore */ } });
 
 // ---------- потоковый markdown ----------
 class MdStream {
@@ -421,7 +483,7 @@ async function editConfig() {
   const miss = missingFields(cfg);
   if (miss.length) { out(`${C.red}  Всё ещё не хватает: ${miss.join(', ')}${C.reset}\n`); return; }
   state.cfg = cfg;
-  out(`${C.green}  ✓ Настройки применены:${C.reset} ${cfg.provider} · ${cfg.model}\n`);
+  out(`${C.green}  ✓ Настройки применены:${C.reset} ${cfg.provider} · ${cfg.model}\n`); drawHeader();
 }
 
 async function handleSlash(text) {
@@ -433,7 +495,7 @@ async function handleSlash(text) {
     case '/model':
       if (arg) {
         state.cfg.model = arg; setConfigValue('MODEL', arg);
-        out(`${C.green}  ✓ Модель:${C.reset} ${arg}\n`);
+        out(`${C.green}  ✓ Модель:${C.reset} ${arg}\n`); drawHeader();
       } else {
         out(`\n  Сейчас: ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
         const list = META[state.cfg.provider]?.models || [];
@@ -447,7 +509,7 @@ async function handleSlash(text) {
         setConfigValue('PROVIDER', p);
         const cfg = loadConfig();
         state.cfg = cfg;
-        out(`${C.green}  ✓ Провайдер:${C.reset} ${p}\n`);
+        out(`${C.green}  ✓ Провайдер:${C.reset} ${p}\n`); drawHeader();
         const miss = missingFields(cfg);
         if (miss.length) out(`${C.orange}  Не хватает: ${miss.join(', ')} — открой /config${C.reset}\n`);
         else if (!META[p].models.includes(cfg.model)) out(`${C.gray}  Модель «${cfg.model}» может не подойти. Доступно: ${META[p].models.join(', ')}. Сменить: /model имя${C.reset}\n`);
@@ -457,7 +519,9 @@ async function handleSlash(text) {
       break;
     case '/mode': cycleMode(); out(`${C.orange}  ⏵⏵ ${modeLabel()}${C.reset}\n`); break;
     case '/clear':
-      agent.clear(); out('\x1b[2J\x1b[3J\x1b[H'); banner(); break;
+      agent.clear();
+      if (headerOn) { out(`\x1b[${HDR_LINES + 1};1H\x1b[J`); drawHeader(); } else out('\x1b[2J\x1b[3J\x1b[H');
+      banner(); break;
     case '/cwd': out(`  ${process.cwd()}\n`); break;
     case '/exit': case '/quit': bye(); break;
     default: out(`${C.red}  Неизвестная команда ${cmd}.${C.reset} ${C.gray}/help — список команд${C.reset}\n`);
@@ -495,7 +559,8 @@ async function main() {
     ui, cwd: process.cwd(),
   });
 
-  out('\n');
+  enableHeader();
+  if (!headerOn) out('\n');
   banner();
 
   let first = args.join(' ').trim();
