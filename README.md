@@ -74,6 +74,12 @@ While the agent is thinking, a shimmering status line is shown (white text with 
 | `/model name` | change the model |
 | `/provider name` | change the provider |
 | `/lang` | change the language (English / Русский) |
+| `/init` | the agent creates ONESUN.md for the project |
+| `/commit` | the agent writes a commit message and commits the changes |
+| `/test` | the agent finds and runs the project tests |
+| `/desktop task` | the agent works on your computer: opens apps, types, clicks (Windows) |
+| `/undo` | undo the last file change made by the agent |
+| `/copy` | copy the last answer to the clipboard |
 | `/mode` or **Shift+Tab** | permission mode |
 | `/clear` | clear the conversation |
 | `/exit` or Ctrl+C twice | quit |
