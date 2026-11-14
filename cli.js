@@ -133,25 +133,30 @@ function box(lines) {
 }
 
 // ---------- закреплённая шапка (логотип и название) ----------
-const HDR_LINES = 4;
+// Логотип OneSun: кольцо с диагональным разрезом, нарисованное блоками (каждый символ = 2 пикселя по вертикали).
+const LOGO = [
+  '   ▄████▄▄  ',
+  ' ██▄    ▀██ ',
+  '██        ██',
+  '██        ██',
+  ' ██▄    ▄▀█ ',
+  '  ▀▀████▀▀  ',
+];
+const LOGO_ASCII = LOGO.map((l) => l.replace(/█/g, '#').replace(/▀/g, '"').replace(/▄/g, ','));
+const HDR_LINES = LOGO.length + 1; // логотип + разделитель
+const HDR_MIN_ROWS = 18;
 let headerOn = false;
 
 function headerLines() {
   const w = cols();
-  const R = C.orange, Y = ansi('\x1b[1;38;5;220m');
-  const core = FANCY ? '●' : 'O';
-  const sun = [
-    `${R}  \\ | /  ${C.reset}`,
-    `${R} -- ${Y}${core}${R} -- ${C.reset}`,
-    `${R}  / | \\  ${C.reset}`,
-  ];
-  const max = w - 14;
-  const info = [
-    `${C.bold}${C.orange}OneSun Code${C.reset} ${C.gray}v${pkg.version}${C.reset}`,
-    `${C.gray}${clipTo(state.cfg.provider + ' · ' + state.cfg.model, max)}${C.reset}`,
-    `${C.gray}${clipTo(process.cwd(), max)}${C.reset}`,
-  ];
-  const lines = sun.map((l, i) => l + '  ' + info[i]);
+  const white = ansi('\x1b[1;97m');
+  const art = FANCY ? LOGO : LOGO_ASCII;
+  const max = Math.max(10, w - LOGO[0].length - 6);
+  const info = [];
+  info[1] = `${white}OneSun Code${C.reset} ${C.gray}v${pkg.version}${C.reset}`;
+  info[2] = `${C.gray}${clipTo(state.cfg.provider + ' · ' + state.cfg.model, max)}${C.reset}`;
+  info[3] = `${C.gray}${clipTo(process.cwd(), max)}${C.reset}`;
+  const lines = art.map((l, i) => white + l + C.reset + '  ' + (info[i] || ''));
   lines.push(`${C.gray}${S.h.repeat(w - 1)}${C.reset}`);
   return lines;
 }
@@ -165,7 +170,7 @@ function drawHeader() {
 
 function enableHeader() {
   const rows = process.stdout.rows || 0;
-  if (state.cfg.header === false || rows < 14 || cols() < 50) return;
+  if (state.cfg.header === false || rows < HDR_MIN_ROWS || cols() < 50) return;
   headerOn = true;
   out('\x1b[2J');
   out(`\x1b[${HDR_LINES + 1};${rows}r`); // прокручивается только область под шапкой
@@ -182,7 +187,7 @@ function disableHeader() {
 process.stdout.on('resize', () => {
   if (!headerOn) return;
   const rows = process.stdout.rows || 0;
-  if (rows < 14) { disableHeader(); return; }
+  if (rows < HDR_MIN_ROWS) { disableHeader(); return; }
   out('\x1b7');
   out(`\x1b[${HDR_LINES + 1};${rows}r`);
   out('\x1b8');
