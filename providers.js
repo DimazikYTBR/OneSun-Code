@@ -1,9 +1,11 @@
 'use strict';
-// Провайдеры нейросетей: единый интерфейс chat() со стримингом и вызовом инструментов.
-// Внутренний формат сообщений:
+// AI providers: one chat() interface with streaming and tool calls.
+// Internal message format:
 //  {role:'user', content}
 //  {role:'assistant', text, toolCalls:[{id,name,args}], raw?}
 //  {role:'tool', results:[{id,name,content,isError}]}
+
+const { t, tEn } = require('./i18n');
 
 const META = {
   anthropic: {
@@ -27,12 +29,12 @@ const META = {
     models: ['deepseek-chat', 'deepseek-reasoner'],
   },
   openrouter: {
-    name: 'OpenRouter (много моделей)', type: 'openai',
+    name: 'OpenRouter (many models)', type: 'openai',
     url: 'https://openrouter.ai/api/v1/chat/completions',
     models: ['google/gemini-4-carbon', 'google/gemini-4-hydrogen', 'openai/gpt-4o', 'deepseek/deepseek-chat'],
   },
   custom: {
-    name: 'Свой (OpenAI-совместимый)', type: 'openai', url: '', models: [],
+    name: 'Custom (OpenAI-compatible)', type: 'openai', url: '', models: [],
   },
 };
 
@@ -62,15 +64,15 @@ async function* sse(resp) {
 }
 
 async function errText(resp) {
-  let t = '';
-  try { t = await resp.text(); } catch { /* ignore */ }
-  try { const j = JSON.parse(t); t = j.error?.message || (typeof j.error === 'string' ? j.error : '') || j.message || t; } catch { /* keep raw */ }
-  if (Array.isArray(t)) t = JSON.stringify(t);
+  let body = '';
+  try { body = await resp.text(); } catch { /* ignore */ }
+  try { const j = JSON.parse(body); body = j.error?.message || (typeof j.error === 'string' ? j.error : '') || j.message || body; } catch { /* keep raw */ }
+  if (Array.isArray(body)) body = JSON.stringify(body);
   let hint = '';
-  if (resp.status === 401 || resp.status === 403) hint = ' — проверь API-ключ и доступ к модели.';
-  else if (resp.status === 404) hint = ' — проверь название модели.';
-  else if (resp.status === 429) hint = ' — лимит запросов или нет денег на балансе.';
-  return `Ошибка API ${resp.status}: ${String(t).slice(0, 600)}${hint}`;
+  if (resp.status === 401 || resp.status === 403) hint = t('api.hint.auth');
+  else if (resp.status === 404) hint = t('api.hint.404');
+  else if (resp.status === 429) hint = t('api.hint.429');
+  return t('api.err', resp.status, String(body).slice(0, 600), hint);
 }
 
 async function doFetch(url, opts) {
@@ -78,11 +80,11 @@ async function doFetch(url, opts) {
     return await fetch(url, opts);
   } catch (e) {
     if (e.name === 'AbortError') throw e;
-    throw new Error('Не удалось связаться с провайдером (' + (e.cause?.code || e.message) + '). Проверь интернет/VPN.');
+    throw new Error(t('net.err', e.cause?.code || e.message));
   }
 }
 
-// ---------- OpenAI-совместимые ----------
+// ---------- OpenAI-compatible ----------
 async function chatOpenAI(o) {
   const msgs = [{ role: 'system', content: o.system }];
   for (const m of o.messages) {
@@ -136,7 +138,7 @@ async function chatAnthropic(o) {
       for (const t of m.toolCalls || []) blocks.push({ type: 'tool_use', id: t.id, name: t.name, input: t.args || {} });
       if (blocks.length) msgs.push({ role: 'assistant', content: blocks });
     } else if (m.role === 'tool') {
-      msgs.push({ role: 'user', content: m.results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: r.content || '(пусто)', is_error: !!r.isError })) });
+      msgs.push({ role: 'user', content: m.results.map(r => ({ type: 'tool_result', tool_use_id: r.id, content: r.content || tEn('empty'), is_error: !!r.isError })) });
     }
   }
   const body = {
@@ -152,7 +154,7 @@ async function chatAnthropic(o) {
   let text = '';
   const blocks = {};
   for await (const j of sse(r)) {
-    if (j.type === 'error') throw new Error(j.error?.message || 'Ошибка стрима Anthropic');
+    if (j.type === 'error') throw new Error(j.error?.message || t('anthropic.stream'));
     if (j.type === 'content_block_start' && j.content_block?.type === 'tool_use') {
       blocks[j.index] = { id: j.content_block.id, name: j.content_block.name, json: '' };
     } else if (j.type === 'content_block_delta') {
@@ -178,7 +180,7 @@ async function chatGemini(o) {
       }
       if (parts.length) contents.push({ role: 'model', parts });
     } else if (m.role === 'tool') {
-      contents.push({ role: 'user', parts: m.results.map(r => ({ functionResponse: { name: r.name, response: { result: r.content || '(пусто)' } } })) });
+      contents.push({ role: 'user', parts: m.results.map(r => ({ functionResponse: { name: r.name, response: { result: r.content || tEn('empty') } } })) });
     }
   }
   const body = {
@@ -199,7 +201,7 @@ async function chatGemini(o) {
   let n = 0;
   for await (const j of sse(r)) {
     if (j.error) throw new Error(j.error.message || JSON.stringify(j.error));
-    if (j.promptFeedback?.blockReason) throw new Error('Запрос заблокирован: ' + j.promptFeedback.blockReason);
+    if (j.promptFeedback?.blockReason) throw new Error(t('gemini.blocked', j.promptFeedback.blockReason));
     for (const part of j.candidates?.[0]?.content?.parts || []) {
       if (part.thought) continue;
       if (part.functionCall) {
@@ -216,10 +218,10 @@ async function chatGemini(o) {
 
 async function chat(o) {
   const meta = META[o.provider];
-  if (!meta) throw new Error('Неизвестный провайдер: ' + o.provider);
-  if (!o.key) throw new Error('Не задан API-ключ. Открой /settings.');
-  if (!o.model) throw new Error('Не выбрана модель. Открой /settings.');
-  if (!o.url) throw new Error('Не задан адрес API (Base URL). Открой /settings.');
+  if (!meta) throw new Error(t('prov.unknown', o.provider));
+  if (!o.key) throw new Error(t('prov.nokey'));
+  if (!o.model) throw new Error(t('prov.nomodel'));
+  if (!o.url) throw new Error(t('prov.nourl'));
   if (meta.type === 'anthropic') return chatAnthropic(o);
   if (meta.type === 'gemini') return chatGemini(o);
   return chatOpenAI(o);
@@ -229,7 +231,7 @@ function resolveUrl(provider, settings) {
   const meta = META[provider];
   const base = ((settings && settings.baseUrl) || '').trim().replace(/\/+$/, '');
   if (!base) return meta ? meta.url : '';
-  // BASE_URL позволяет указать прокси/зеркало для любого провайдера
+  // BASE_URL lets you use a proxy/mirror for any provider
   if (meta && meta.type === 'anthropic') return /\/messages$/.test(base) ? base : base.replace(/\/v1$/, '') + '/v1/messages';
   if (meta && meta.type === 'gemini') return (/\/models$/.test(base) ? base : /\/v1(beta)?$/.test(base) ? base + '/models' : base + '/v1beta/models') + '/';
   return /chat\/completions$/.test(base) ? base : base + '/chat/completions';
