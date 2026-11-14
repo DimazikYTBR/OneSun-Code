@@ -16,17 +16,17 @@ const META = {
   gemini: {
     name: 'Google Gemini', type: 'gemini',
     url: 'https://generativelanguage.googleapis.com/v1beta/models/',
-    models: ['gemini-4-argon', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-3.8-flash'],
+    models: ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-4-hydrogen', 'gemini-4-carbon', 'gemini-4-argon'],
   },
   openai: {
     name: 'OpenAI', type: 'openai',
     url: 'https://api.openai.com/v1/chat/completions',
-    models: ['gpt-4.1', 'gpt-4o', 'o4-mini'],
+    models: ['gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-4.1', 'gpt-4o', 'o4-mini'],
   },
   deepseek: {
     name: 'DeepSeek', type: 'openai',
     url: 'https://api.deepseek.com/chat/completions',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    models: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
   },
   openrouter: {
     name: 'OpenRouter (many models)', type: 'openai',
