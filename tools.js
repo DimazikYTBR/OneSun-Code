@@ -91,6 +91,7 @@ function writeTool(a, ctx) {
   if (typeof a.content !== 'string') throw tErr('err.needcontent');
   const existed = fs.existsSync(p);
   fs.mkdirSync(path.dirname(p), { recursive: true });
+  recordUndo(p, existed, existed ? fs.readFileSync(p, 'utf8') : null);
   fs.writeFileSync(p, a.content, 'utf8');
   const n = a.content.split('\n').length;
   const k = existed ? 'write.updated' : 'write.created';
@@ -116,6 +117,7 @@ function editTool(a, ctx) {
   if (n === 0) throw tErr('err.nomatch');
   if (n > 1 && !a.replace_all) throw tErr('err.multi', n);
   const res = a.replace_all ? text.split(oldS).join(newS) : text.replace(oldS, () => newS);
+  recordUndo(p, true, (bom ? '﻿' : '') + text);
   fs.writeFileSync(p, (bom ? '﻿' : '') + res, 'utf8');
   return { content: tEn('edit.done', a.path, a.replace_all ? n : 1), preview: t('edit.preview', relP(ctx, p)) };
 }
@@ -226,7 +228,92 @@ function bashTool(a, ctx) {
   });
 }
 
-const IMPL = { Read: readTool, Write: writeTool, Edit: editTool, LS: lsTool, Glob: globTool, Grep: grepTool, Bash: bashTool };
+// ---------- Undo: files changed by Write/Edit in this session ----------
+const undoStack = [];
+function recordUndo(p, existed, prev) {
+  undoStack.push({ p, existed, prev });
+  if (undoStack.length > 50) undoStack.shift();
+}
+// Returns the path that was restored, or null when there is nothing to undo.
+function undoLast() {
+  const u = undoStack.pop();
+  if (!u) return null;
+  if (u.existed) fs.writeFileSync(u.p, u.prev, 'utf8');
+  else { try { fs.unlinkSync(u.p); } catch { /* already gone */ } }
+  return u.p;
+}
+
+// ---------- Desktop: open apps, type, press keys, click, screenshot (Windows) ----------
+const psq = (s) => `'${String(s).replace(/'/g, "''")}'`;
+const sendKeysEscape = (s) => String(s).replace(/[+^%~(){}[\]]/g, (c) => '{' + c + '}');
+
+function runPS(script, timeoutMs = 20000) {
+  return new Promise((resolve) => {
+    const enc = Buffer.from(script, 'utf16le').toString('base64');
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', enc],
+      { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let text = '';
+    child.stdout.on('data', (d) => { text += d; });
+    child.stderr.on('data', (d) => { text += d; });
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* ignore */ } }, timeoutMs);
+    child.on('error', (e) => { clearTimeout(timer); resolve({ ok: false, text: e.message }); });
+    child.on('close', (code) => { clearTimeout(timer); resolve({ ok: code === 0, text: text.trim() }); });
+  });
+}
+
+async function desktopTool(a, ctx) {
+  const act = String(a.action || '');
+  const target = a.target == null ? '' : String(a.target);
+  const isWin = process.platform === 'win32';
+  const fail = (msg) => ({ content: 'Error: ' + msg, isError: true, preview: t('desk.fail', msg) });
+  const ok = (msg) => ({ content: msg, preview: t('desk.preview', act, target || `${a.x},${a.y}`) });
+
+  if (act === 'open') {
+    if (!target) return fail('target is required');
+    if (isWin) {
+      const r = await runPS(`Start-Process ${psq(target)}`);
+      return r.ok ? ok(`Opened: ${target}`) : fail(r.text || 'Start-Process failed');
+    }
+    let cmd, args;
+    if (process.platform === 'darwin') { cmd = 'open'; args = [target]; }
+    else if (process.env.TERMUX_VERSION) {
+      cmd = /^https?:\/\//.test(target) ? 'termux-open-url' : 'termux-open'; args = [target];
+    } else { cmd = 'xdg-open'; args = [target]; }
+    return new Promise((resolve) => {
+      const c = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+      c.on('error', (e) => resolve(fail(`${cmd}: ${e.message}`)));
+      c.unref();
+      setTimeout(() => resolve(ok(`Opened: ${target}`)), 300);
+    });
+  }
+
+  if (!isWin) return { content: tEn('desk.unsupported', act), isError: true, preview: t('desk.unsupported', act) };
+
+  let script;
+  if (act === 'type') {
+    script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(${psq(sendKeysEscape(target))})`;
+  } else if (act === 'keys') {
+    script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(${psq(target)})`;
+  } else if (act === 'click') {
+    const x = Math.round(Number(a.x)), y = Math.round(Number(a.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return fail('x and y are required for click');
+    script = `Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetCursorPos(int X,int Y); [DllImport("user32.dll")] public static extern void mouse_event(int f,int x,int y,int d,int e);' -Name U -Namespace W; ` +
+      `[W.U]::SetCursorPos(${x},${y}); [W.U]::mouse_event(2,0,0,0,0); [W.U]::mouse_event(4,0,0,0,0)`;
+  } else if (act === 'screenshot') {
+    const file = path.resolve(ctx.cwd, target || 'screenshot.png');
+    script = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; ` +
+      `$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); ` +
+      `$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save(${psq(file)})`;
+    const r = await runPS(script);
+    return r.ok ? { content: `Screenshot saved: ${file}`, preview: t('desk.preview', act, file) } : fail(r.text || 'screenshot failed');
+  } else {
+    return fail(`unknown action "${act}"`);
+  }
+  const r = await runPS(script);
+  return r.ok ? ok(`Done: ${act}`) : fail(r.text || `${act} failed`);
+}
+
+const IMPL = { Read: readTool, Write: writeTool, Edit: editTool, LS: lsTool, Glob: globTool, Grep: grepTool, Bash: bashTool, Desktop: desktopTool };
 
 const TOOL_DEFS = [
   {
@@ -274,6 +361,14 @@ const TOOL_DEFS = [
       command: { type: 'string', description: 'The command' },
       timeout: { type: 'integer', description: 'Timeout in seconds (default 120, max 600)' } }, required: ['command'] },
   },
+  {
+    name: 'Desktop', description: 'Controls the user\'s computer: opens an app, a file or a web address; types text; presses keys (SendKeys syntax, e.g. "^s" = Ctrl+S, "{ENTER}"); clicks at screen coordinates; takes a screenshot. Typing, keys, click and screenshot work on Windows only. Use it only when the user asks to act on their computer.',
+    parameters: { type: 'object', properties: {
+      action: { type: 'string', enum: ['open', 'type', 'keys', 'click', 'screenshot'], description: 'What to do' },
+      target: { type: 'string', description: 'open: app name, file path or URL. type: text to type. keys: key sequence. screenshot: file name to save (optional)' },
+      x: { type: 'integer', description: 'click: X coordinate on the primary screen' },
+      y: { type: 'integer', description: 'click: Y coordinate on the primary screen' } }, required: ['action'] },
+  },
 ];
 
-module.exports = { IMPL, TOOL_DEFS, relP, firstLines };
+module.exports = { IMPL, TOOL_DEFS, relP, firstLines, undoLast };
