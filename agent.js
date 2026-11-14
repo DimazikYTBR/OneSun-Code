@@ -49,11 +49,16 @@ function describe(name, a, ctx) {
         alwaysLabel: t('perm.always', first),
       };
     }
+    case 'Desktop': {
+      const what = a.target != null ? String(a.target) : (a.x != null ? `${a.x},${a.y}` : '');
+      return { summary: oneLine(`${a.action || ''} ${what}`), title: t('perm.desktop'), detail: what, alwaysLabel: t('perm.always', 'Desktop ' + (a.action || '')) };
+    }
     default: return { summary: oneLine(JSON.stringify(a)), title: t('perm.other') };
   }
 }
 
 function allowKey(name, a) {
+  if (name === 'Desktop') return 'Desktop:' + ((a && a.action) || '');
   if (name === 'Write' || name === 'Edit') return 'edit';
   if (name === 'Bash') return 'Bash:' + (String((a && a.command) || '').trim().split(/\s+/)[0] || '');
   return name + ':' + ((a && a.path) || '');
@@ -85,6 +90,7 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
       `- Bash runs ${isWin ? 'PowerShell on Windows' : 'bash'} in the working directory. Do not start interactive or never-ending commands (dev servers, watchers) unless asked.`,
       '- When the task is done, say briefly what you did. Do not paste whole files back into the chat.',
       '- If the user denies an action, do not retry it; ask what to do instead.',
+      '- The Desktop tool acts on the user\'s own computer (open apps, type, click). Use it only when the user asks for that; use Bash for project work.',
       '- Use plain markdown: ``` fences for code, `inline code`, **bold**, "-" for lists. No tables.',
       '',
       `Environment: working directory = ${cwd}; platform = ${process.platform}; date = ${new Date().toISOString().slice(0, 10)}.`,
@@ -95,7 +101,7 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
   function needsPermission(name, a) {
     const mode = getMode();
     if (name === 'Write' || name === 'Edit') return mode === 'ask';
-    if (name === 'Bash') return mode !== 'yolo';
+    if (name === 'Bash' || name === 'Desktop') return mode !== 'yolo';
     if (mode === 'yolo') return false;
     if (!a || !a.path) return false;
     const r = path.relative(cwd, path.resolve(cwd, a.path));
@@ -183,6 +189,10 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
     run,
     abort() { if (abortCtl) abortCtl.abort(); },
     clear() { history.length = 0; allow.clear(); },
+    lastText() {
+      for (let i = history.length - 1; i >= 0; i--) if (history[i].role === 'assistant' && history[i].text) return history[i].text;
+      return '';
+    },
     get running() { return running; },
     get historyLength() { return history.length; },
   };
