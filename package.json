@@ -1,6 +1,6 @@
 {
   "name": "onesun-code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OneSun Code — ИИ-агент для программирования в терминале (интерфейс в стиле Claude Code)",
   "bin": {
     "onesun": "cli.js"
