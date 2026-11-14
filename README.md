@@ -15,7 +15,7 @@
 Затем открой PowerShell или Windows Terminal и введи:
 
 ```
-git clone https://github.com/ТВОЙ_НИК/OneSunCode.git
+git clone https://github.com/DimazikYTBR/OneSun-Code.git
 cd OneSunCode
 npm link
 ```
@@ -98,17 +98,3 @@ git pull
 ## Если символы выглядят криво
 
 Лучше всего работает **Windows Terminal** (в Windows 11 он стоит по умолчанию). В старой консоли программа сама переключается на простые символы; принудительно: `set ONESUN_ASCII=1`.
-
-## Как выложить на GitHub (для автора)
-
-```
-cd OneSunCode
-git init
-git add .
-git commit -m "OneSun Code"
-git branch -M main
-git remote add origin https://github.com/ТВОЙ_НИК/OneSunCode.git
-git push -u origin main
-```
-
-Перед `git push` убедись, что `config.txt` в списке игнорируемых (`.gitignore` уже настроен) и ключи в репозиторий не попали.
