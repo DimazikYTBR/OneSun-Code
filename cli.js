@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-// OneSun Code — терминальный ИИ-агент для программирования (интерфейс в стиле Claude Code).
-// Без внешних зависимостей: нужен только Node.js 18+.
+// OneSun Code — a terminal AI coding agent (Claude Code-style interface).
+// No external dependencies: only Node.js 18+ is needed.
 
 const fs = require('fs');
 const path = require('path');
@@ -9,14 +9,14 @@ const readline = require('readline');
 const { spawn } = require('child_process');
 const { META, resolveUrl } = require('./providers');
 const { createAgent } = require('./agent');
+const { LANGS, setLang, getLang, t } = require('./i18n');
 const pkg = require('./package.json');
 
 const CONFIG_FILE = process.env.ONESUN_CONFIG || path.join(__dirname, 'config.txt');
-const EXAMPLE_FILE = path.join(__dirname, 'config.example.txt');
 const MODES = ['ask', 'edits', 'yolo'];
-const MODE_LABEL = { ask: 'спрашивать разрешения', edits: 'правки без вопросов', yolo: 'всё без вопросов (!)' };
+const DEFAULT_CONFIG = 'LANG=en\nPROVIDER=anthropic\nAPI_KEY=\nMODEL=\nBASE_URL=\nMODE=ask\nHEADER=on\n';
 
-// ---------- оформление ----------
+// ---------- styling ----------
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
 const ansi = (s) => (useColor ? s : '');
 const C = {
@@ -35,7 +35,9 @@ const out = (s) => process.stdout.write(s);
 const cols = () => Math.max(40, Math.min(process.stdout.columns || 80, 140));
 const clipTo = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-// ---------- настройки (config.txt) ----------
+// ---------- settings (config.txt) ----------
+// The config file is NEVER overwritten: it is created only if it does not exist (COPYFILE_EXCL),
+// and later changes only replace or append single "KEY=value" lines.
 function parseConfig(text) {
   const o = {};
   for (const raw of text.split(/\r?\n/)) {
@@ -51,34 +53,47 @@ function parseConfig(text) {
   return o;
 }
 
-function loadConfig() {
-  if (!fs.existsSync(CONFIG_FILE)) {
-    try { fs.copyFileSync(EXAMPLE_FILE, CONFIG_FILE); }
-    catch { fs.writeFileSync(CONFIG_FILE, 'PROVIDER=anthropic\nAPI_KEY=\nMODEL=\nBASE_URL=\nMODE=ask\n', 'utf8'); }
-  }
-  const raw = parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8'));
-  const provider = (raw.PROVIDER || 'anthropic').toLowerCase();
-  const key = raw[provider.toUpperCase() + '_API_KEY'] || raw.API_KEY || '';
-  const mode = MODES.includes((raw.MODE || '').toLowerCase()) ? raw.MODE.toLowerCase() : 'ask';
-  return { provider, key, model: raw.MODEL || '', baseUrl: raw.BASE_URL || '', mode, header: (raw.HEADER || 'on').toLowerCase() !== 'off' };
-}
-
-function missingFields(cfg) {
-  const m = [];
-  if (!META[cfg.provider]) m.push(`PROVIDER (одно из: ${Object.keys(META).join(', ')})`);
-  if (!cfg.key) m.push('API_KEY');
-  if (!cfg.model) m.push('MODEL');
-  if (cfg.provider === 'custom' && !cfg.baseUrl) m.push('BASE_URL');
-  return m;
-}
+const normLang = (v) => { const l = String(v || '').trim().toLowerCase(); return LANGS.includes(l) ? l : ''; };
 
 function setConfigValue(key, value) {
   let text = '';
-  try { text = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { /* новый файл */ }
+  try { text = fs.readFileSync(CONFIG_FILE, 'utf8'); } catch { /* new file */ }
   const re = new RegExp('^[ \\t]*' + key + '[ \\t]*=.*$', 'im');
   if (re.test(text)) text = text.replace(re, () => `${key}=${value}`);
   else text += (text && !text.endsWith('\n') ? '\n' : '') + `${key}=${value}\n`;
   fs.writeFileSync(CONFIG_FILE, text, 'utf8');
+}
+
+function createConfig(lang) {
+  const tpl = path.join(__dirname, lang === 'ru' ? 'config.example.ru.txt' : 'config.example.txt');
+  try {
+    fs.copyFileSync(tpl, CONFIG_FILE, fs.constants.COPYFILE_EXCL);
+  } catch (e) {
+    if (e.code === 'EEXIST') return; // already there: leave it alone
+    try { fs.writeFileSync(CONFIG_FILE, DEFAULT_CONFIG, { flag: 'wx' }); } catch { /* exists or read-only */ }
+  }
+  setConfigValue('LANG', lang);
+}
+
+function loadConfig() {
+  if (!fs.existsSync(CONFIG_FILE)) createConfig(getLang());
+  const raw = parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  const provider = (raw.PROVIDER || 'anthropic').toLowerCase();
+  const key = raw[provider.toUpperCase() + '_API_KEY'] || raw.API_KEY || '';
+  const mode = MODES.includes((raw.MODE || '').toLowerCase()) ? raw.MODE.toLowerCase() : 'ask';
+  return {
+    provider, key, model: raw.MODEL || '', baseUrl: raw.BASE_URL || '', mode,
+    header: (raw.HEADER || 'on').toLowerCase() !== 'off', lang: normLang(raw.LANG),
+  };
+}
+
+function missingFields(cfg) {
+  const m = [];
+  if (!META[cfg.provider]) m.push(t('prov.oneof', Object.keys(META).join(', ')));
+  if (!cfg.key) m.push('API_KEY');
+  if (!cfg.model) m.push('MODEL');
+  if (cfg.provider === 'custom' && !cfg.baseUrl) m.push('BASE_URL');
+  return m;
 }
 
 function openInEditor(file) {
@@ -87,7 +102,7 @@ function openInEditor(file) {
     if (process.platform === 'win32') child = spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
     else if (process.platform === 'darwin') child = spawn('open', ['-t', file], { detached: true, stdio: 'ignore' });
     else child = spawn('xdg-open', [file], { detached: true, stdio: 'ignore' });
-    child.on('error', () => { /* редактор не найден — путь к файлу уже показан */ });
+    child.on('error', () => { /* no editor found — the file path is already printed */ });
     child.unref();
   } catch { /* ignore */ }
 }
@@ -101,28 +116,79 @@ function waitEnter(msg) {
   });
 }
 
+// ---------- arrow-key menu ----------
+function selectMenu(title, hint, options, def = 0) {
+  return new Promise((resolve) => {
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    let sel = def;
+    out(`${C.bold}${title}${C.reset}\n${C.gray}${hint}${C.reset}\n`);
+    const draw = (first) => {
+      if (!first) out(`\x1b[${options.length}A`);
+      options.forEach((o, i) => out(`\r\x1b[2K  ${i === sel ? C.orange + S.sel + C.reset : ' '} ${i + 1}. ${o}\n`));
+    };
+    draw(true);
+    const done = (i) => {
+      process.stdin.off('keypress', onKey);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      out(`\x1b[${options.length + 2}A\x1b[J`);
+      resolve(i);
+    };
+    const onKey = (s, key) => {
+      if (!key) return;
+      if (key.ctrl && key.name === 'c') { out('\n'); process.exit(0); }
+      if (key.name === 'up') { sel = (sel + options.length - 1) % options.length; draw(false); }
+      else if (key.name === 'down' || key.name === 'tab') { sel = (sel + 1) % options.length; draw(false); }
+      else if (/^[1-9]$/.test(s || '') && Number(s) <= options.length) done(Number(s) - 1);
+      else if (key.name === 'return' || key.name === 'enter') done(sel);
+    };
+    process.stdin.on('keypress', onKey);
+  });
+}
+
+async function chooseLanguage(def) {
+  const names = t('lang.names');
+  const idx = await selectMenu(t('lang.title'), t('lang.hint'), LANGS.map((l) => names[l]), Math.max(0, LANGS.indexOf(def)));
+  return LANGS[idx];
+}
+
+// Language is asked once. If the config already exists, it is kept as is: only the LANG line is appended.
+async function ensureLanguage() {
+  const exists = fs.existsSync(CONFIG_FILE);
+  const raw = exists ? parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8')) : {};
+  let lang = normLang(raw.LANG);
+  if (!lang) {
+    setLang('en');
+    lang = await chooseLanguage('en');
+    if (exists) setConfigValue('LANG', lang); else createConfig(lang);
+  }
+  setLang(lang);
+}
+
 async function ensureConfig() {
   let cfg = loadConfig();
   while (true) {
     const miss = missingFields(cfg);
     if (!miss.length) return cfg;
-    out(`\n${C.orange}${S.star} OneSun Code${C.reset} — нужно заполнить настройки.\n`);
-    out(`  Не хватает: ${C.bold}${miss.join(', ')}${C.reset}\n`);
-    out(`  Открываю файл: ${C.cyan}${CONFIG_FILE}${C.reset}\n`);
-    out('  Впиши значения после «=», сохрани файл (Ctrl+S) и вернись в это окно.\n\n');
+    out(`\n${C.orange}${S.star} OneSun Code${C.reset} — ${t('cfg.title')}\n`);
+    out(`  ${t('cfg.missing')} ${C.bold}${miss.join(', ')}${C.reset}\n`);
+    out(`  ${t('cfg.opening')} ${C.cyan}${CONFIG_FILE}${C.reset}\n`);
+    out(`  ${t('cfg.instr')}\n\n`);
     openInEditor(CONFIG_FILE);
-    await waitEnter(`${C.gray}Нажми Enter, когда сохранишь файл… ${C.reset}`);
+    await waitEnter(`${C.gray}${t('cfg.press')}${C.reset}`);
     cfg = loadConfig();
   }
 }
 
-// ---------- состояние ----------
+// ---------- state ----------
 const state = { cfg: null, mode: 'ask' };
 const hist = [];
-const modeLabel = () => MODE_LABEL[state.mode];
+const modeLabel = () => t('mode.' + state.mode);
 function cycleMode() { state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length]; }
 
-// ---------- рамка ----------
+// ---------- box ----------
 function box(lines) {
   const w = Math.max(...lines.map((l) => strip(l).length)) + 2;
   out(C.orange + S.tl + S.h.repeat(w) + S.tr + C.reset + '\n');
@@ -132,8 +198,8 @@ function box(lines) {
   out(C.orange + S.bl + S.h.repeat(w) + S.br + C.reset + '\n');
 }
 
-// ---------- закреплённая шапка (логотип и название) ----------
-// Логотип OneSun: кольцо с диагональным разрезом, нарисованное блоками (каждый символ = 2 пикселя по вертикали).
+// ---------- pinned header (logo and name) ----------
+// OneSun logo: a ring with a diagonal cut, drawn with block characters (one character = 2 pixels vertically).
 const LOGO = [
   '   ▄████▄▄  ',
   ' ██▄    ▀██ ',
@@ -143,7 +209,7 @@ const LOGO = [
   '  ▀▀████▀▀  ',
 ];
 const LOGO_ASCII = LOGO.map((l) => l.replace(/█/g, '#').replace(/▀/g, '"').replace(/▄/g, ','));
-const HDR_LINES = LOGO.length + 1; // логотип + разделитель
+const HDR_LINES = LOGO.length + 1; // logo + divider
 const HDR_MIN_ROWS = 18;
 let headerOn = false;
 
@@ -173,7 +239,7 @@ function enableHeader() {
   if (state.cfg.header === false || rows < HDR_MIN_ROWS || cols() < 50) return;
   headerOn = true;
   out('\x1b[2J');
-  out(`\x1b[${HDR_LINES + 1};${rows}r`); // прокручивается только область под шапкой
+  out(`\x1b[${HDR_LINES + 1};${rows}r`); // only the area below the header scrolls
   out(`\x1b[${HDR_LINES + 1};1H`);
   drawHeader();
 }
@@ -196,63 +262,95 @@ process.stdout.on('resize', () => {
 
 function banner() {
   if (headerOn) {
-    out(`${C.orange}${S.star}${C.reset} ${C.bold}Добро пожаловать в OneSun Code!${C.reset}\n`);
-    out(`${C.gray}  /help — команды · /config — ключ и модель · Esc — прервать · Shift+Tab — режим${C.reset}\n`);
+    out(`${C.orange}${S.star}${C.reset} ${C.bold}${t('welcome')}${C.reset}\n`);
+    out(`${C.gray}  ${t('welcome.hint')}${C.reset}\n`);
     return;
   }
   const max = cols() - 12;
   box([
-    `${C.orange}${S.star}${C.reset} ${C.bold}Добро пожаловать в OneSun Code${C.reset} ${C.gray}v${pkg.version}${C.reset}`,
+    `${C.orange}${S.star}${C.reset} ${C.bold}${t('welcome')}${C.reset} ${C.gray}v${pkg.version}${C.reset}`,
     '',
-    `${C.gray}/help — команды · /config — ключ и модель${C.reset}`,
-    `${C.gray}папка:${C.reset}  ${clipTo(process.cwd(), max)}`,
-    `${C.gray}модель:${C.reset} ${state.cfg.provider} · ${clipTo(state.cfg.model, max - 10)}`,
+    `${C.gray}${t('box.hint')}${C.reset}`,
+    `${C.gray}${t('box.folder')}${C.reset}  ${clipTo(process.cwd(), max)}`,
+    `${C.gray}${t('box.model')}${C.reset} ${state.cfg.provider} · ${clipTo(state.cfg.model, max - 10)}`,
   ]);
-  out(`${C.gray}  Советы: Esc — прервать · Shift+Tab — режим разрешений · «\\» в конце строки — перенос${C.reset}\n`);
+  out(`${C.gray}  ${t('box.tips')}${C.reset}\n`);
 }
 
 function printHelp() {
-  const rows = [
-    ['/help', 'эта справка'],
-    ['/config', 'открыть config.txt (ключ, модель, провайдер)'],
-    ['/model [имя]', 'показать или сменить модель'],
-    ['/provider [имя]', 'показать или сменить провайдера'],
-    ['/mode', 'сменить режим разрешений (или Shift+Tab)'],
-    ['/clear', 'очистить диалог и экран'],
-    ['/cwd', 'показать рабочую папку'],
-    ['/exit', 'выйти (или Ctrl+C дважды)'],
-  ];
   out('\n');
-  for (const [a, b] of rows) out(`  ${C.orange}${a.padEnd(17)}${C.reset}${b}\n`);
-  out(`\n  ${C.gray}Режимы: «спрашивать разрешения» — перед правкой файлов и командами;\n  «правки без вопросов» — файлы правятся сами, команды спрашивают;\n  «всё без вопросов» — агент делает всё сам, будь осторожен.${C.reset}\n`);
-  out(`  ${C.gray}Файл ONESUN.md в папке проекта читается как инструкции для агента.${C.reset}\n`);
+  for (const [a, b] of t('help.rows')) out(`  ${C.orange}${a.padEnd(17)}${C.reset}${b}\n`);
+  out(`\n  ${C.gray}${t('help.modes')}${C.reset}\n`);
+  out(`  ${C.gray}${t('help.md')}${C.reset}\n`);
 }
 
-// ---------- спиннер ----------
-const spin = { t: null, i: 0, t0: 0, label: '', on: false };
-const VERBS = ['Думаю', 'Колдую', 'Соображаю', 'Кодю', 'Грею мозги'];
+// ---------- "thinking" indicator: shimmering text + rotating phrases ----------
+const TRUECOLOR = /truecolor|24bit/i.test(process.env.COLORTERM || '') || !!process.env.WT_SESSION || process.env.TERM_PROGRAM === 'vscode';
+const WAVE256 = [231, 195, 153, 117, 75, 33]; // white -> blue for 256-color terminals
+
+function waveColor(k) { // k: 0 = white, 1 = blue
+  if (!useColor) return '';
+  if (TRUECOLOR) {
+    const r = Math.round(255 + (60 - 255) * k);
+    const g = Math.round(255 + (130 - 255) * k);
+    return `\x1b[1;38;2;${r};${g};255m`;
+  }
+  return `\x1b[1;38;5;${WAVE256[Math.round(k * (WAVE256.length - 1))]}m`;
+}
+
+// White text with a blue wave running through it (like the shimmer in Claude Code).
+function shimmer(text, ms) {
+  if (!useColor) return text;
+  const chars = [...text];
+  const width = 5;
+  const pos = (ms / 65) % (chars.length + width * 2) - width;
+  let s = '';
+  chars.forEach((ch, i) => {
+    const d = Math.abs(i - pos);
+    s += waveColor(d >= width ? 0 : 0.5 + 0.5 * Math.cos(Math.PI * d / width)) + ch;
+  });
+  return s + C.reset;
+}
+
+const spin = { timer: null, t0: 0, label: '', on: false, rotate: false, nextAt: 0 };
+function pickPhrase() {
+  const list = t('spin.phrases');
+  let p;
+  do { p = list[Math.floor(Math.random() * list.length)]; } while (p === spin.label && list.length > 1);
+  return p;
+}
+const nextSwitch = () => Date.now() + 2500 + Math.random() * 1500;
+
 function spinStart(label) {
-  if (spin.on) { if (label) spin.label = label; return; }
-  spin.on = true; spin.i = 0; spin.t0 = Date.now();
-  spin.label = label || VERBS[Math.floor(Math.random() * VERBS.length)];
+  if (spin.on) { if (label) { spin.label = label; spin.rotate = false; } return; }
+  spin.on = true; spin.t0 = Date.now();
+  spin.rotate = !label;
+  spin.label = label || pickPhrase();
+  spin.nextAt = nextSwitch();
   out('\x1b[?25l');
   const draw = () => {
-    const f = S.frames[spin.i++ % S.frames.length];
-    const s = Math.floor((Date.now() - spin.t0) / 1000);
-    out(`\r\x1b[2K${C.orange}${f} ${spin.label}…${C.reset} ${C.gray}(esc — прервать · ${s} с)${C.reset}`);
+    const now = Date.now();
+    const el = now - spin.t0;
+    if (spin.rotate && now >= spin.nextAt) { spin.label = pickPhrase(); spin.nextAt = nextSwitch(); }
+    const frame = S.frames[Math.floor(el / 120) % S.frames.length];
+    const hint = t('spin.hint', Math.floor(el / 1000));
+    let lab = spin.label + '…';
+    const room = cols() - hint.length - 8;
+    if (lab.length > room) lab = lab.slice(0, Math.max(5, room - 1)) + '…';
+    out(`\r\x1b[2K${C.orange}${frame}${C.reset} ${shimmer(lab, el)} ${C.gray}(${hint})${C.reset}`);
   };
   draw();
-  spin.t = setInterval(draw, 120);
+  spin.timer = setInterval(draw, 70);
 }
 function spinStop() {
   if (!spin.on) return;
-  clearInterval(spin.t);
+  clearInterval(spin.timer);
   spin.on = false;
   out('\r\x1b[2K\x1b[?25h');
 }
 process.on('exit', () => { try { if (process.stdout.isTTY) { out('\x1b[?25h'); disableHeader(); } } catch { /* ignore */ } });
 
-// ---------- потоковый markdown ----------
+// ---------- streaming markdown ----------
 class MdStream {
   constructor(w) { this.w = w; this.reset(); }
   reset() {
@@ -313,7 +411,7 @@ class MdStream {
   endLine() {
     if (this.mode === 'text' && this.pend) this.w('*');
     this.pend = false;
-    this.w(this.mode === 'skip' ? C.reset : C.reset + '\n'); // строка с ``` ничего не печатает
+    this.w(this.mode === 'skip' ? C.reset : C.reset + '\n'); // a ``` line prints nothing
     this.mode = null; this.buf = ''; this.inl = false; this.bold = false;
   }
   flush() {
@@ -323,7 +421,7 @@ class MdStream {
 }
 const md = new MdStream(out);
 
-// ---------- вывод инструментов ----------
+// ---------- tool output ----------
 const LABEL = { Edit: 'Update', Write: 'Write', Read: 'Read', Bash: 'Bash', LS: 'List', Glob: 'Search', Grep: 'Search' };
 const cur = { diff: null, shownDiff: false };
 
@@ -331,8 +429,8 @@ function printDiff(diff) {
   const MAX = 12, w = cols() - 10;
   const show = (arr, total, sign, color) => {
     arr.slice(0, MAX).forEach((l) => out(`      ${color}${sign} ${clipTo(l, w)}${C.reset}\n`));
-    const t = total || arr.length;
-    if (t > MAX) out(`      ${C.gray}… ещё ${t - MAX} строк${C.reset}\n`);
+    const n = total || arr.length;
+    if (n > MAX) out(`      ${C.gray}${t('more.lines', n - MAX)}${C.reset}\n`);
   };
   show(diff.removed || [], diff.removedTotal, '-', C.red);
   show(diff.added || [], diff.addedTotal, '+', C.green);
@@ -345,7 +443,7 @@ function printBranch(preview, color) {
   for (const l of lines.slice(1)) out(`     ${color}${clipTo(l, w)}${C.reset}\n`);
 }
 
-// ---------- клавиши во время работы агента ----------
+// ---------- keys while the agent is working ----------
 let permHandler = null;
 let agent = null;
 function runKey(s, key) {
@@ -373,10 +471,10 @@ function askPermission(info) {
     else if (info.detail) {
       const lines = info.detail.split('\n');
       lines.slice(0, 12).forEach((l) => out(`      ${C.gray}${clipTo(l, cols() - 10)}${C.reset}\n`));
-      if (lines.length > 12) out(`      ${C.gray}… ещё ${lines.length - 12} строк${C.reset}\n`);
+      if (lines.length > 12) out(`      ${C.gray}${t('more.lines', lines.length - 12)}${C.reset}\n`);
     }
     out(`\n  ${C.bold}${info.title}${C.reset}\n`);
-    const opts = ['Да', info.alwaysLabel || 'Да, и больше не спрашивать в этой сессии', 'Нет, сделай по-другому (Esc)'];
+    const opts = [t('perm.yes'), info.alwaysLabel || t('perm.always.default'), t('perm.no')];
     let sel = 0;
     const draw = (first) => {
       if (!first) out(`\x1b[${opts.length}A`);
@@ -402,10 +500,10 @@ function askPermission(info) {
 const ui = {
   status(s) {
     if (s === 'thinking') spinStart();
-    else if (s === 'tool') spinStart('Выполняю');
+    else if (s === 'tool') spinStart(t('spin.running'));
     else spinStop();
   },
-  text(t) { spinStop(); md.push(t); },
+  text(chunk) { spinStop(); md.push(chunk); },
   textEnd() { md.flush(); md.reset(); },
   toolStart({ name, summary, diff }) {
     spinStop();
@@ -418,12 +516,12 @@ const ui = {
     printBranch(preview, denied ? C.orange : ok ? C.gray : C.red);
   },
   askPermission,
-  interrupted() { spinStop(); out(`\n  ${C.gray}${S.branch}${C.reset}  ${C.orange}Прервано${C.reset}\n`); },
+  interrupted() { spinStop(); out(`\n  ${C.gray}${S.branch}${C.reset}  ${C.orange}${t('interrupted')}${C.reset}\n`); },
   error(msg) { spinStop(); out(`\n${C.red}✗ ${msg}${C.reset}\n`); },
 };
 
-// ---------- ввод ----------
-const SLASH = ['/help', '/config', '/settings', '/model', '/provider', '/mode', '/clear', '/cwd', '/exit', '/quit'];
+// ---------- input ----------
+const SLASH = ['/help', '/config', '/settings', '/model', '/provider', '/lang', '/mode', '/clear', '/cwd', '/exit', '/quit'];
 
 function separator() {
   const label = ` ${state.cfg.model} · ${modeLabel()} · /help `;
@@ -439,7 +537,8 @@ function readInput() {
       history: hist.slice(), historySize: 200, prompt: `${C.orange}>${C.reset} `,
       completer: (line) => (line.startsWith('/') ? [SLASH.filter((c) => c.startsWith(line)), line] : [[], line]),
     });
-    let parts = [], timer = null, done = false;
+    const parts = [];
+    let timer = null, done = false;
     const finish = () => {
       done = true;
       process.stdin.off('keypress', onKey);
@@ -459,13 +558,13 @@ function readInput() {
       if (l.endsWith('\\')) { parts.push(l.slice(0, -1)); rl.setPrompt(`${C.gray}…${C.reset} `); rl.prompt(); return; }
       parts.push(l);
       clearTimeout(timer);
-      timer = setTimeout(finish, 35); // склеиваем вставленный многострочный текст
+      timer = setTimeout(finish, 35); // glue together pasted multi-line text
     });
     rl.on('SIGINT', () => {
       if (rl.line && rl.line.length) { rl.write(null, { ctrl: true, name: 'u' }); return; }
       if (Date.now() - lastSigint < 2000) { bye(); return; }
       lastSigint = Date.now();
-      out(`\n${C.gray}  Нажми Ctrl+C ещё раз, чтобы выйти${C.reset}\n`);
+      out(`\n${C.gray}  ${t('ctrlc')}${C.reset}\n`);
       rl.prompt(true);
     });
     rl.on('close', () => { if (!done) bye(); });
@@ -475,20 +574,21 @@ function readInput() {
 }
 
 function bye() {
-  out(`\n${C.orange}${S.star}${C.reset} До встречи!\n`);
+  out(`\n${C.orange}${S.star}${C.reset} ${t('bye')}\n`);
   process.exit(0);
 }
 
-// ---------- команды ----------
+// ---------- commands ----------
 async function editConfig() {
-  out(`\n  Открываю ${C.cyan}${CONFIG_FILE}${C.reset}\n`);
+  out(`\n  ${t('cfg.open')} ${C.cyan}${CONFIG_FILE}${C.reset}\n`);
   openInEditor(CONFIG_FILE);
-  await waitEnter(`${C.gray}  Сохрани файл и нажми Enter, чтобы применить… ${C.reset}`);
+  await waitEnter(`${C.gray}  ${t('cfg.apply')}${C.reset}`);
   const cfg = loadConfig();
   const miss = missingFields(cfg);
-  if (miss.length) { out(`${C.red}  Всё ещё не хватает: ${miss.join(', ')}${C.reset}\n`); return; }
+  if (miss.length) { out(`${C.red}  ${t('cfg.still')} ${miss.join(', ')}${C.reset}\n`); return; }
   state.cfg = cfg;
-  out(`${C.green}  ✓ Настройки применены:${C.reset} ${cfg.provider} · ${cfg.model}\n`); drawHeader();
+  if (cfg.lang) setLang(cfg.lang);
+  out(`${C.green}  ${t('cfg.applied')}${C.reset} ${cfg.provider} · ${cfg.model}\n`); drawHeader();
 }
 
 async function handleSlash(text) {
@@ -500,12 +600,12 @@ async function handleSlash(text) {
     case '/model':
       if (arg) {
         state.cfg.model = arg; setConfigValue('MODEL', arg);
-        out(`${C.green}  ✓ Модель:${C.reset} ${arg}\n`); drawHeader();
+        out(`${C.green}  ${t('model.set')}${C.reset} ${arg}\n`); drawHeader();
       } else {
-        out(`\n  Сейчас: ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
+        out(`\n  ${t('now')} ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
         const list = META[state.cfg.provider]?.models || [];
-        if (list.length) out(`  ${C.gray}Для ${state.cfg.provider}: ${list.join(', ')}${C.reset}\n`);
-        out(`  ${C.gray}Сменить: /model имя-модели${C.reset}\n`);
+        if (list.length) out(`  ${C.gray}${t('model.for', state.cfg.provider, list.join(', '))}${C.reset}\n`);
+        out(`  ${C.gray}${t('model.change')}${C.reset}\n`);
       }
       break;
     case '/provider':
@@ -514,14 +614,20 @@ async function handleSlash(text) {
         setConfigValue('PROVIDER', p);
         const cfg = loadConfig();
         state.cfg = cfg;
-        out(`${C.green}  ✓ Провайдер:${C.reset} ${p}\n`); drawHeader();
+        out(`${C.green}  ${t('prov.set')}${C.reset} ${p}\n`); drawHeader();
         const miss = missingFields(cfg);
-        if (miss.length) out(`${C.orange}  Не хватает: ${miss.join(', ')} — открой /config${C.reset}\n`);
-        else if (!META[p].models.includes(cfg.model)) out(`${C.gray}  Модель «${cfg.model}» может не подойти. Доступно: ${META[p].models.join(', ')}. Сменить: /model имя${C.reset}\n`);
+        if (miss.length) out(`${C.orange}  ${t('prov.missing', miss.join(', '))}${C.reset}\n`);
+        else if (!META[p].models.includes(cfg.model)) out(`${C.gray}  ${t('prov.mismatch', cfg.model, META[p].models.join(', '))}${C.reset}\n`);
       } else {
-        out(`\n  Сейчас: ${C.orange}${state.cfg.provider}${C.reset}\n  ${C.gray}Доступно: ${Object.keys(META).join(', ')}\n  Сменить: /provider имя${C.reset}\n`);
+        out(`\n  ${t('now')} ${C.orange}${state.cfg.provider}${C.reset}\n  ${C.gray}${t('prov.avail', Object.keys(META).join(', '))}\n  ${t('prov.change')}${C.reset}\n`);
       }
       break;
+    case '/lang': {
+      const lang = await chooseLanguage(getLang());
+      setLang(lang); state.cfg.lang = lang; setConfigValue('LANG', lang);
+      out(`${C.green}  ${t('lang.set', t('lang.short')[lang])}${C.reset}\n`);
+      break;
+    }
     case '/mode': cycleMode(); out(`${C.orange}  ⏵⏵ ${modeLabel()}${C.reset}\n`); break;
     case '/clear':
       agent.clear();
@@ -529,7 +635,7 @@ async function handleSlash(text) {
       banner(); break;
     case '/cwd': out(`  ${process.cwd()}\n`); break;
     case '/exit': case '/quit': bye(); break;
-    default: out(`${C.red}  Неизвестная команда ${cmd}.${C.reset} ${C.gray}/help — список команд${C.reset}\n`);
+    default: out(`${C.red}  ${t('cmd.unknown', cmd)}${C.reset} ${C.gray}${t('cmd.unknownHint')}${C.reset}\n`);
   }
 }
 
@@ -539,20 +645,26 @@ async function runAgent(text) {
   finally { spinStop(); detachRunKeys(); }
 }
 
-// ---------- запуск ----------
+// ---------- start ----------
 async function main() {
   const args = process.argv.slice(2);
-  if (args[0] === '--help' || args[0] === '-h') {
-    console.log(`OneSun Code v${pkg.version}\n\nИспользование:\n  onesun            запустить в текущей папке\n  onesun "задача"   запустить и сразу выполнить задачу\n  onesun --config   открыть config.txt\n  onesun --version  версия\n\nНастройки: ${CONFIG_FILE}`);
+  // language for --help / errors before the interactive start (the config is only read, never changed)
+  try { setLang(normLang(parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8')).LANG) || 'en'); } catch { setLang('en'); }
+
+  if (args[0] === '--help' || args[0] === '-h') { console.log(t('cli.help', pkg.version, CONFIG_FILE)); return; }
+  if (args[0] === '--version' || args[0] === '-v') { console.log(pkg.version); return; }
+  if (args[0] === '--config') {
+    if (!fs.existsSync(CONFIG_FILE)) createConfig('en');
+    openInEditor(CONFIG_FILE);
+    console.log(t('cli.opened', CONFIG_FILE));
     return;
   }
-  if (args[0] === '--version' || args[0] === '-v') { console.log(pkg.version); return; }
-  if (args[0] === '--config') { loadConfig(); openInEditor(CONFIG_FILE); console.log('Открыт файл: ' + CONFIG_FILE); return; }
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.error('OneSun Code нужен интерактивный терминал (PowerShell, Windows Terminal, cmd).');
+    console.error(t('cli.notty'));
     process.exit(1);
   }
 
+  await ensureLanguage();
   state.cfg = await ensureConfig();
   state.mode = state.cfg.mode;
   agent = createAgent({
@@ -581,4 +693,4 @@ async function main() {
   }
 }
 
-main().catch((e) => { spinStop(); console.error('\n' + C.red + 'Критическая ошибка: ' + (e && e.stack || e) + C.reset); process.exit(1); });
+main().catch((e) => { spinStop(); console.error('\n' + C.red + t('cli.fatal') + (e && e.stack || e) + C.reset); process.exit(1); });
