@@ -1,10 +1,11 @@
 'use strict';
-// Агентный цикл: модель -> инструменты -> модель ... пока не будет готов ответ.
-// Весь вывод идёт через объект ui (его реализует cli.js), поэтому агент можно тестировать отдельно.
+// Agent loop: model -> tools -> model ... until the answer is ready.
+// All output goes through the ui object (implemented in cli.js), so the agent can be tested on its own.
 
 const fs = require('fs');
 const path = require('path');
 const providers = require('./providers');
+const { t, tEn, getLang } = require('./i18n');
 const { IMPL, TOOL_DEFS, relP } = require('./tools');
 
 const MAX_TURNS = 40;
@@ -20,15 +21,15 @@ function describe(name, a, ctx) {
   a = a || {};
   const rel = () => relP(ctx, path.resolve(ctx.cwd, a.path || '.'));
   switch (name) {
-    case 'Read': return { summary: rel(), title: 'Прочитать файл вне рабочей папки?' };
-    case 'LS': return { summary: rel(), title: 'Посмотреть папку вне рабочей папки?' };
-    case 'Glob': return { summary: `${a.pattern || ''}${a.path ? ' в ' + rel() : ''}`, title: 'Искать файлы вне рабочей папки?' };
-    case 'Grep': return { summary: `${a.pattern || ''}${a.path ? ' в ' + rel() : ''}`, title: 'Искать в файлах вне рабочей папки?' };
+    case 'Read': return { summary: rel(), title: t('perm.read') };
+    case 'LS': return { summary: rel(), title: t('perm.ls') };
+    case 'Glob': return { summary: `${a.pattern || ''}${a.path ? t('perm.in') + rel() : ''}`, title: t('perm.glob') };
+    case 'Grep': return { summary: `${a.pattern || ''}${a.path ? t('perm.in') + rel() : ''}`, title: t('perm.grep') };
     case 'Write': {
       const lines = String(a.content || '').split('\n');
       return {
-        summary: rel(), title: 'Создать или перезаписать файл?',
-        alwaysLabel: 'Да, и больше не спрашивать про правки файлов в этой сессии',
+        summary: rel(), title: t('perm.write'),
+        alwaysLabel: t('perm.always.edit'),
         diff: { removed: [], added: lines.slice(0, 200), addedTotal: lines.length },
       };
     }
@@ -36,19 +37,19 @@ function describe(name, a, ctx) {
       const o = String(a.old_string || '').split('\n');
       const n = String(a.new_string || '').split('\n');
       return {
-        summary: rel(), title: 'Внести изменения в файл?',
-        alwaysLabel: 'Да, и больше не спрашивать про правки файлов в этой сессии',
+        summary: rel(), title: t('perm.edit'),
+        alwaysLabel: t('perm.always.edit'),
         diff: { removed: o.slice(0, 200), added: n.slice(0, 200), addedTotal: n.length, removedTotal: o.length },
       };
     }
     case 'Bash': {
-      const first = String(a.command || '').trim().split(/\s+/)[0] || 'команды';
+      const first = String(a.command || '').trim().split(/\s+/)[0] || t('perm.cmd');
       return {
-        summary: oneLine(a.command), title: 'Выполнить команду?', detail: String(a.command || ''),
-        alwaysLabel: `Да, и больше не спрашивать про «${first}» в этой сессии`,
+        summary: oneLine(a.command), title: t('perm.bash'), detail: String(a.command || ''),
+        alwaysLabel: t('perm.always', first),
       };
     }
-    default: return { summary: oneLine(JSON.stringify(a)), title: 'Выполнить действие?' };
+    default: return { summary: oneLine(JSON.stringify(a)), title: t('perm.other') };
   }
 }
 
@@ -69,9 +70,9 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
     let extra = '';
     for (const f of ['ONESUN.md']) {
       try {
-        const t = fs.readFileSync(path.join(cwd, f), 'utf8');
-        if (t.trim()) extra += `\n\nИнструкции проекта (${f}):\n${t.slice(0, 8000)}`;
-      } catch { /* нет файла */ }
+        const txt = fs.readFileSync(path.join(cwd, f), 'utf8');
+        if (txt.trim()) extra += `\n\nProject instructions (${f}):\n${txt.slice(0, 8000)}`;
+      } catch { /* no such file */ }
     }
     return [
       'You are OneSun Code, an interactive coding agent that runs in the user\'s terminal (similar to Claude Code).',
@@ -87,6 +88,7 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
       '- Use plain markdown: ``` fences for code, `inline code`, **bold**, "-" for lists. No tables.',
       '',
       `Environment: working directory = ${cwd}; platform = ${process.platform}; date = ${new Date().toISOString().slice(0, 10)}.`,
+      `The user chose the interface language "${getLang()}"; reply in it unless the user writes in another language.`,
     ].join('\n') + extra;
   }
 
@@ -106,8 +108,8 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
     const impl = IMPL[tc.name];
     if (!impl) {
       ui.toolStart({ name: tc.name, summary: '?' });
-      ui.toolResult({ ok: false, preview: 'Неизвестный инструмент ' + tc.name });
-      return { id: tc.id, name: tc.name, content: `Неизвестный инструмент: ${tc.name}`, isError: true };
+      ui.toolResult({ ok: false, preview: t('agent.unknownTool', tc.name) });
+      return { id: tc.id, name: tc.name, content: tEn('agent.unknownTool', tc.name), isError: true };
     }
     const d = describe(tc.name, a, ctx);
     ui.toolStart({ name: tc.name, summary: d.summary, diff: d.diff });
@@ -116,8 +118,8 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
       if (!allow.has(key)) {
         const dec = await ui.askPermission({ name: tc.name, title: d.title, summary: d.summary, diff: d.diff, detail: d.detail, alwaysLabel: d.alwaysLabel });
         if (dec === 'no') {
-          ui.toolResult({ ok: false, denied: true, preview: 'Отклонено' });
-          return { id: tc.id, name: tc.name, content: 'Пользователь отклонил это действие. Не повторяй его; спроси, что сделать иначе.', isError: true };
+          ui.toolResult({ ok: false, denied: true, preview: t('agent.denied') });
+          return { id: tc.id, name: tc.name, content: 'The user denied this action. Do not repeat it; ask what to do instead.', isError: true };
         }
         if (dec === 'always') allow.add(key);
       }
@@ -130,7 +132,7 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
       return { id: tc.id, name: tc.name, content: o.content, isError: !!o.isError };
     } catch (e) {
       ui.toolResult({ ok: false, preview: e.message });
-      return { id: tc.id, name: tc.name, content: 'Ошибка: ' + e.message, isError: true };
+      return { id: tc.id, name: tc.name, content: 'Error: ' + (e.en || e.message), isError: true };
     }
   }
 
@@ -158,18 +160,18 @@ function createAgent({ getConfig, getMode, ui, cwd }) {
           return;
         }
         ui.textEnd();
-        if (!res.text && !res.toolCalls.length) { ui.error('Модель вернула пустой ответ. Попробуй ещё раз или другую модель.'); return; }
+        if (!res.text && !res.toolCalls.length) { ui.error(t('agent.empty')); return; }
         history.push({ role: 'assistant', text: res.text, toolCalls: res.toolCalls, raw: res.raw });
         if (!res.toolCalls.length) return;
         const results = [];
         for (const tc of res.toolCalls) {
-          if (signal.aborted) { results.push({ id: tc.id, name: tc.name, content: 'Прервано пользователем', isError: true }); continue; }
+          if (signal.aborted) { results.push({ id: tc.id, name: tc.name, content: 'Interrupted by the user', isError: true }); continue; }
           results.push(await execTool(tc, signal));
         }
         history.push({ role: 'tool', results });
         if (signal.aborted) { ui.interrupted(); return; }
       }
-      ui.error(`Достигнут лимит шагов (${MAX_TURNS}). Напиши «продолжай», чтобы идти дальше.`);
+      ui.error(t('agent.limit', MAX_TURNS));
     } finally {
       running = false;
       abortCtl = null;
