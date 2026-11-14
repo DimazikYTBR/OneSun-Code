@@ -4,10 +4,12 @@
 // No external dependencies: only Node.js 18+ is needed.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const { META, resolveUrl } = require('./providers');
+const { undoLast } = require('./tools');
 const { createAgent } = require('./agent');
 const { LANGS, setLang, getLang, t } = require('./i18n');
 const pkg = require('./package.json');
@@ -184,7 +186,13 @@ async function ensureConfig() {
 
 // ---------- state ----------
 const state = { cfg: null, mode: 'ask' };
-const hist = [];
+// Input history is kept between launches in the home folder (not in the project, not in config.txt).
+const HIST_FILE = path.join(os.homedir(), '.onesun_history');
+const hist = (() => {
+  try { return JSON.parse(fs.readFileSync(HIST_FILE, 'utf8')).filter((x) => typeof x === 'string').slice(0, 200); }
+  catch { return []; }
+})();
+function saveHist() { try { fs.writeFileSync(HIST_FILE, JSON.stringify(hist.slice(0, 200)), 'utf8'); } catch { /* read-only home: skip */ } }
 const modeLabel = () => t('mode.' + state.mode);
 function cycleMode() { state.mode = MODES[(MODES.indexOf(state.mode) + 1) % MODES.length]; }
 
@@ -521,7 +529,8 @@ const ui = {
 };
 
 // ---------- input ----------
-const SLASH = ['/help', '/config', '/settings', '/model', '/provider', '/lang', '/mode', '/clear', '/cwd', '/exit', '/quit'];
+const SLASH = ['/help', '/config', '/settings', '/model', '/provider', '/lang', '/mode', '/clear', '/cwd',
+  '/init', '/commit', '/test', '/desktop', '/undo', '/copy', '/exit', '/quit'];
 
 function separator() {
   const label = ` ${state.cfg.model} · ${modeLabel()} · /help `;
@@ -591,11 +600,75 @@ async function editConfig() {
   out(`${C.green}  ${t('cfg.applied')}${C.reset} ${cfg.provider} · ${cfg.model}\n`); drawHeader();
 }
 
+// Copies text to the system clipboard using the tool that exists on this system.
+function copyToClipboard(text) {
+  return new Promise((resolve) => {
+    let child;
+    try {
+      if (process.platform === 'win32') {
+        child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+          '[Console]::InputEncoding=[System.Text.Encoding]::UTF8; $input | Set-Clipboard'], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
+      } else if (process.platform === 'darwin') child = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] });
+      else if (process.env.TERMUX_VERSION) child = spawn('termux-clipboard-set', [], { stdio: ['pipe', 'ignore', 'ignore'] });
+      else child = spawn('xclip', ['-selection', 'clipboard'], { stdio: ['pipe', 'ignore', 'ignore'] });
+    } catch { return resolve(false); }
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+    child.stdin.on('error', () => { /* tool exited early */ });
+    child.stdin.end(text, 'utf8');
+  });
+}
+
+// Adds the content of files mentioned as @path (e.g. "fix @src/app.js"). Only real text files under 200 KB.
+function expandMentions(text) {
+  const cwd = process.cwd();
+  const added = [];
+  let extra = '';
+  for (const m of text.matchAll(/(?:^|\s)@([^\s]+)/g)) {
+    const rel = m[1];
+    if (added.includes(rel)) continue;
+    try {
+      const p = path.resolve(cwd, rel);
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 200 * 1024) continue;
+      const buf = fs.readFileSync(p);
+      if (buf.includes(0)) continue;
+      added.push(rel);
+      extra += `\n\n[File: ${rel}]\n\`\`\`\n${buf.toString('utf8')}\n\`\`\``;
+    } catch { /* not a file: keep it as plain text */ }
+  }
+  added.forEach((f) => out(`${C.gray}  + ${f}${C.reset}\n`));
+  return text + extra;
+}
+
+const CMD_PROMPTS = {
+  init: 'Explore this project: read the main files, the folder structure and the package/config files. Then create ONESUN.md in the project root with: a short description of the stack, how to install, run and test the project, and the main conventions. Keep it under 60 lines.',
+  commit: 'Check the state with git (git status and git diff). Write a short, clear commit message that describes the changes, then stage and commit them (git add -A, then git commit). Do not push. If there is nothing to commit, say so.',
+  test: 'Find out how this project runs its tests (package.json scripts, pytest, go test, etc.), run them and report the results. If something fails, explain why and propose a fix. Do not change code without asking unless the fix is obvious.',
+};
+
 async function handleSlash(text) {
   const [cmd, ...rest] = text.split(/\s+/);
   const arg = rest.join(' ').trim();
   switch (cmd) {
-    case '/help': printHelp(); break;
+    case '/': case '/help': printHelp(); break;
+    case '/init': case '/commit': case '/test':
+      await runAgent(CMD_PROMPTS[cmd.slice(1)]); break;
+    case '/desktop':
+      if (!arg) { out(`${C.gray}  ${t('desk.usage')}${C.reset}\n`); break; }
+      await runAgent(`Use the Desktop tool to do this on the user's computer: ${arg}. Take one step at a time and check the result of each step before the next.`);
+      break;
+    case '/undo': {
+      const p = undoLast();
+      out(p ? `${C.green}  ${t('undo.done', path.relative(process.cwd(), p) || p)}${C.reset}\n` : `${C.gray}  ${t('undo.none')}${C.reset}\n`);
+      break;
+    }
+    case '/copy': {
+      const last = agent.lastText();
+      if (!last) { out(`${C.gray}  ${t('copy.none')}${C.reset}\n`); break; }
+      out(`${(await copyToClipboard(last)) ? C.green + '  ' + t('copy.done') : C.red + '  ' + t('copy.fail')}${C.reset}\n`);
+      break;
+    }
     case '/config': case '/settings': case '/key': await editConfig(); break;
     case '/model':
       if (arg) {
@@ -687,9 +760,10 @@ async function main() {
     else text = (await readInput()).trim();
     if (!text) continue;
     if (hist[0] !== text) hist.unshift(text);
+    saveHist();
     if (text.startsWith('/')) { await handleSlash(text); continue; }
     if (text === 'exit' || text === 'quit') bye();
-    await runAgent(text);
+    await runAgent(expandMentions(text));
   }
 }
 
