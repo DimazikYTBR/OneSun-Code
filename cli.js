@@ -579,6 +579,8 @@ function readInput() {
       if (voice) return;
       const v = startVoice(state.cfg && state.cfg.lang);
       if (!v) { out(`${C.gray}  ${t('voice.none')}${C.reset}\n`); return; }
+      // Windows: voice typing is started with Win+H; the text lands in the line and Enter sends it as usual.
+      if (v.hotkey) { out(`${C.cyan}  ● ${t('voice.hotkey')}${C.reset}\n`); return; }
       voice = v;
       if (v.oneShot) {
         out(`${C.cyan}  ● ${t('voice.listening')}${C.reset}\n`);
@@ -592,9 +594,11 @@ function readInput() {
     };
     // Ctrl+G while recording: stop and put the recognized text into the line (Enter then sends it).
     const voiceStopToLine = () => {
-      const txt = voice.stop();
+      const v = voice;
+      const txt = v.stop();
       voice = null;
-      rl.write(txt ? txt + ' ' : '');
+      if (txt) rl.write(txt + ' ');
+      else out(`${C.red}  ${t('voice.fail', v.error() || t('voice.empty'))}${C.reset}\n`);
       rl.prompt(true);
     };
     const onKey = (s, key) => {
@@ -613,7 +617,15 @@ function readInput() {
     process.stdin.on('keypress', onKey);
     rl.on('line', (l) => {
       // Enter while recording: take the speech and send it right away.
-      if (voice && !voice.oneShot) { const txt = voice.stop(); voice = null; parts.push([txt, l].filter(Boolean).join(' ')); finish(); return; }
+      if (voice && !voice.oneShot) {
+        const v = voice;
+        const txt = v.stop();
+        voice = null;
+        if (!txt && !l.trim()) { out(`${C.red}  ${t('voice.fail', v.error() || t('voice.empty'))}${C.reset}\n`); rl.prompt(true); return; }
+        parts.push([txt, l].filter(Boolean).join(' '));
+        finish();
+        return;
+      }
       if (l.endsWith('\\')) { parts.push(l.slice(0, -1)); rl.setPrompt(`${C.gray}…${C.reset} `); rl.prompt(); return; }
       parts.push(l);
       clearTimeout(timer);
