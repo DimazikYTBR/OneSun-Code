@@ -271,7 +271,8 @@ async function desktopTool(a, ctx) {
   if (act === 'open') {
     if (!target) return fail('target is required');
     if (isWin) {
-      const r = await runPS(`Start-Process ${psq(target)}`);
+      // Wait a bit so the new window gets focus before any typing follows.
+      const r = await runPS(`Start-Process ${psq(target)}; Start-Sleep -Milliseconds 1500`);
       return r.ok ? ok(`Opened: ${target}`) : fail(r.text || 'Start-Process failed');
     }
     let cmd, args;
@@ -291,7 +292,8 @@ async function desktopTool(a, ctx) {
 
   let script;
   if (act === 'type') {
-    script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(${psq(sendKeysEscape(target))})`;
+    // Paste through the clipboard: SendKeys often drops non-English (e.g. Cyrillic) characters.
+    script = `Add-Type -AssemblyName System.Windows.Forms; Set-Clipboard -Value ${psq(target)}; Start-Sleep -Milliseconds 300; [System.Windows.Forms.SendKeys]::SendWait('^v')`;
   } else if (act === 'keys') {
     script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait(${psq(target)})`;
   } else if (act === 'click') {
