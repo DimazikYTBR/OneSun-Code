@@ -1,44 +1,27 @@
-// Voice input. Windows: built-in speech recognition (System.Speech), works until you stop it.
+// Voice input.
+// Windows: presses Win+H, which starts the system's own voice typing. It works on Windows 10/11 with any
+// microphone and the built-in speech languages. The recognized text is typed into the focused line,
+// so the user presses Enter to send it. Nothing is installed and no API key is needed.
 // Termux: termux-speech-to-text (needs the Termux:API app), listens once and returns the text.
 // Returns null where voice input is not available.
 const { spawn } = require('child_process');
 
-function startVoice(lang) {
+function startVoice() {
   if (process.platform === 'win32') {
-    const culture = lang === 'ru' ? 'ru-RU' : 'en-US';
+    // keybd_event: 0x5B = Left Windows key, 0x48 = H, flag 2 = key up.
     const script = [
-      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
-      'Add-Type -AssemblyName System.Speech',
-      `$r=New-Object System.Speech.Recognition.SpeechRecognitionEngine([System.Globalization.CultureInfo]'${culture}')`,
-      '$r.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))',
-      '$r.SetInputToDefaultAudioDevice()',
-      'Register-ObjectEvent -InputObject $r -EventName SpeechRecognized -Action { [Console]::WriteLine($Event.SourceEventArgs.Result.Text); [Console]::Out.Flush() } | Out-Null',
-      '$r.RecognizeAsync([System.Speech.Recognition.RecognizeMode]::Multiple)',
-      'while ($true) { Start-Sleep -Milliseconds 200 }',
+      'Add-Type -MemberDefinition \'[DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, UIntPtr e);\' -Name K -Namespace W',
+      '[W.K]::keybd_event(0x5B,0,0,[UIntPtr]::Zero)',
+      '[W.K]::keybd_event(0x48,0,0,[UIntPtr]::Zero)',
+      '[W.K]::keybd_event(0x48,0,2,[UIntPtr]::Zero)',
+      '[W.K]::keybd_event(0x5B,0,2,[UIntPtr]::Zero)',
     ].join('\n');
     const enc = Buffer.from(script, 'utf16le').toString('base64');
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', enc],
-      { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    const lines = [];
-    let buf = '';
-    child.stdout.on('data', (d) => {
-      buf += d.toString('utf8');
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const s = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (s) lines.push(s);
-      }
-    });
-    child.on('error', () => { /* no PowerShell: stop() returns nothing */ });
-    return {
-      oneShot: false,
-      stop() {
-        try { child.kill(); } catch { /* already gone */ }
-        const rest = buf.trim();
-        return [...lines, rest].filter(Boolean).join(' ');
-      },
-    };
+    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', enc],
+      { windowsHide: true, stdio: 'ignore', detached: true });
+    child.on('error', () => { /* no PowerShell: nothing to press */ });
+    child.unref();
+    return { hotkey: true };
   }
 
   if (process.env.TERMUX_VERSION) {
