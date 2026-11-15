@@ -639,8 +639,9 @@ function readInput() {
         voice = null;
         if (done) return;
         if (!res.text) { out(`${C.red}  ${t('voice.fail', res.error || t('voice.empty'))}${C.reset}\n`); rl.prompt(true); return; }
-        parts.push([res.text, l].filter(Boolean).join(' '));
-        finish();
+        // The speech goes into the input line: you can edit or delete it, and Enter sends it.
+        rl.prompt(true);
+        rl.write([res.text, l].filter(Boolean).join(' '));
         return;
       }
       if (l.endsWith('\\')) { parts.push(l.slice(0, -1)); rl.setPrompt(`${C.gray}…${C.reset} `); rl.prompt(); return; }
