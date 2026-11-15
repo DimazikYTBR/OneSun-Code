@@ -1,0 +1,57 @@
+# ============================================================
+#  OneSun Code — settings
+#  Type the values after the "=" sign and save the file (Ctrl+S).
+#  Lines starting with # are comments, you can leave them alone.
+#  This file is yours: updates (git pull) never overwrite it.
+# ============================================================
+
+# Interface language: en (English) or ru (Русский).
+# Change it here or with the /lang command inside the program.
+LANG=en
+
+# AI provider. Options:
+#   anthropic   - Claude
+#   gemini      - Google Gemini
+#   openai      - OpenAI (GPT)
+#   deepseek    - DeepSeek
+#   openrouter  - OpenRouter (dozens of models with one key)
+#   custom      - any OpenAI-compatible API (then also fill in BASE_URL)
+PROVIDER=anthropic
+
+# Your API key for the chosen provider
+API_KEY=
+
+# Model name. Examples:
+#   anthropic:  claude-sonnet-5-5 | claude-opus-5-5 | claude-haiku-5-5
+#   gemini:     gemini-3.6-flash | gemini-3.5-flash-lite | gemini-4-hydrogen | gemini-4-carbon
+#   openai:     gpt-5.6-sol | gpt-5.6-luna | gpt-4.1 | gpt-4o | o4-mini
+#   deepseek:   deepseek-v4-pro | deepseek-v4-flash | deepseek-chat | deepseek-reasoner
+#   openrouter: google/gemini-4-carbon | openai/gpt-4o
+MODEL=
+
+# Needed only for PROVIDER=custom, or if you go through a proxy/mirror.
+# Example: https://my-proxy.example.com/v1
+BASE_URL=
+
+# Permission mode at startup:
+#   ask   - ask before editing files and running commands (recommended)
+#   edits - files are edited without asking, commands still ask
+#   yolo  - everything without asking (careful!)
+MODE=ask
+
+# Pinned header with the logo and name (on / off).
+# While the header is on, the mouse wheel cannot scroll old messages above the top
+# of the conversation area; if that bothers you, set off.
+HEADER=on
+
+# ------------------------------------------------------------
+# If you use several providers, you can keep a separate key for
+# each one (remove the # at the start of the lines you need).
+# They take priority over API_KEY.
+# ------------------------------------------------------------
+# ANTHROPIC_API_KEY=
+# GEMINI_API_KEY=
+# OPENAI_API_KEY=
+# DEEPSEEK_API_KEY=
+# OPENROUTER_API_KEY=
+# CUSTOM_API_KEY=
