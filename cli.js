@@ -27,8 +27,9 @@ const C = {
   orange: ansi('\x1b[38;5;214m'), red: ansi('\x1b[38;5;203m'), green: ansi('\x1b[38;5;114m'),
   cyan: ansi('\x1b[38;5;116m'), gray: ansi('\x1b[38;5;245m'),
 };
-const FANCY = !process.env.ONESUN_ASCII &&
-  !(process.platform === 'win32' && !process.env.WT_SESSION && !process.env.TERM_PROGRAM && !process.env.ConEmuANSI);
+// ONESUN_FANCY=1 forces the full symbols and block logo (use it in cmd if the font shows them fine).
+const FANCY = process.env.ONESUN_FANCY ? true : (!process.env.ONESUN_ASCII &&
+  !(process.platform === 'win32' && !process.env.WT_SESSION && !process.env.TERM_PROGRAM && !process.env.ConEmuANSI));
 const S = FANCY
   ? { dot: '●', branch: '⎿', sel: '❯', star: '✻', bullet: '•', h: '─', tl: '╭', tr: '╮', bl: '╰', br: '╯', v: '│', frames: ['·', '✢', '✳', '✶', '✻', '✽'] }
   : { dot: '*', branch: '|_', sel: '>', star: '*', bullet: '-', h: '-', tl: '+', tr: '+', bl: '+', br: '+', v: '|', frames: ['|', '/', '-', '\\'] };
