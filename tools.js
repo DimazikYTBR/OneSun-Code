@@ -387,4 +387,10 @@ const TOOL_DEFS = [
   },
 ];
 
-module.exports = { IMPL, TOOL_DEFS, relP, firstLines, undoLast };
+// Adds a tool at runtime (used for MCP servers). def = { description, parameters }.
+function addTool(name, def, impl) {
+  TOOL_DEFS.push({ name, description: def.description, parameters: def.parameters });
+  IMPL[name] = impl;
+}
+
+module.exports = { IMPL, TOOL_DEFS, relP, firstLines, undoLast, addTool };
