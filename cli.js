@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 'use strict';
 // OneSun Code — a terminal AI coding agent (Claude Code-style interface).
