@@ -215,6 +215,173 @@ function loadSession() {
 }
 function deleteSession() { try { fs.unlinkSync(sessionFile(process.cwd())); } catch { /* none */ } }
 
+
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+
+function readPrompt(prompt) {
+  const input = process.stdin;
+  const output = process.stdout;
+
+  // Запасной режим, если терминал не поддерживает raw input.
+  if (!input.isTTY || typeof input.setRawMode !== 'function') {
+    return new Promise(resolve => {
+      const rl = readline.createInterface({
+        input,
+        output
+      });
+
+      rl.question(prompt, answer => {
+        rl.close();
+        resolve(answer);
+      });
+    });
+  }
+
+  return new Promise(resolve => {
+    let buffer = '';
+    let pending = '';
+    let pasting = false;
+    let finished = false;
+
+    const oldRawMode = input.isRaw;
+
+    function render() {
+      output.write('\r\x1b[2K');
+      output.write(prompt + buffer);
+    }
+
+    function insert(text) {
+      buffer += text;
+      output.write(text);
+    }
+
+    function finish(value) {
+      if (finished) return;
+      finished = true;
+
+      output.write('\r\n');
+      output.write('\x1b[?2004l');
+
+      input.removeListener('data', onData);
+
+      try {
+        input.setRawMode(Boolean(oldRawMode));
+      } catch {}
+
+      resolve(value);
+    }
+
+    function processPending() {
+      while (pending.length > 0) {
+        if (pasting) {
+          const end = pending.indexOf(PASTE_END);
+
+          if (end === -1) {
+            const keep = PASTE_END.length - 1;
+
+            if (pending.length > keep) {
+              const part = pending.slice(0, -keep);
+              pending = pending.slice(-keep);
+              insert(part.replace(/\r\n?/g, '\n'));
+            }
+
+            return;
+          }
+
+          const pasted = pending.slice(0, end);
+          pending = pending.slice(end + PASTE_END.length);
+
+          insert(pasted.replace(/\r\n?/g, '\n'));
+          pasting = false;
+          continue;
+        }
+
+        if (pending.startsWith(PASTE_START)) {
+          pending = pending.slice(PASTE_START.length);
+          pasting = true;
+          continue;
+        }
+
+        if (PASTE_START.startsWith(pending)) {
+          return;
+        }
+
+        // Стрелки и другие ANSI-последовательности.
+        if (pending[0] === '\x1b') {
+          if (pending.length === 1) return;
+
+          const match = pending.match(
+            /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/
+          );
+
+          if (match) {
+            pending = pending.slice(match[0].length);
+            continue;
+          }
+
+          if (pending.length < 16) return;
+
+          pending = pending.slice(1);
+          continue;
+        }
+
+        const char = String.fromCodePoint(pending.codePointAt(0));
+        pending = pending.slice(char.length);
+
+        // Ctrl+C
+        if (char === '\x03') {
+          finish(null);
+          return;
+        }
+
+        // Ctrl+D
+        if (char === '\x04' && !buffer) {
+          finish(null);
+          return;
+        }
+
+        // Enter
+        if (char === '\r' || char === '\n') {
+          finish(buffer);
+          return;
+        }
+
+        // Backspace
+        if (char === '\x7f' || char === '\b') {
+          if (buffer.length > 0) {
+            buffer = Array.from(buffer).slice(0, -1).join('');
+            render();
+          }
+          continue;
+        }
+
+        // Игнорируем остальные управляющие символы.
+        if (char.charCodeAt(0) < 32) continue;
+
+        insert(char);
+      }
+    }
+
+    function onData(chunk) {
+      pending += chunk.toString('utf8');
+      processPending();
+    }
+
+    try {
+      input.setRawMode(true);
+      input.resume();
+
+      output.write('\x1b[?2004h');
+      output.write(prompt);
+
+      input.on('data', onData);
+    } catch (error) {
+      finish(null);
+    }
+  });
+}
+
 // Projects folder inside OneSun Code: each user project lives here, and the agent works in it without asking.
 const PROJECTS_DIR = path.join(__dirname, 'projects');
 try { fs.mkdirSync(PROJECTS_DIR, { recursive: true }); } catch { /* read-only install: skip */ }
