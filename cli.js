@@ -11,6 +11,7 @@ const { spawn } = require('child_process');
 const { META, resolveUrl } = require('./providers');
 const { undoLast, IMPL } = require('./tools');
 const { startVoice } = require('./voice');
+const { loadMcpTools } = require('./mcp');
 const { createAgent } = require('./agent');
 const { LANGS, setLang, getLang, t } = require('./i18n');
 const pkg = require('./package.json');
@@ -195,6 +196,24 @@ const hist = (() => {
   catch { return []; }
 })();
 function saveHist() { try { fs.writeFileSync(HIST_FILE, JSON.stringify(hist.slice(0, 200)), 'utf8'); } catch { /* read-only home: skip */ } }
+
+// Conversations are saved per folder, so /resume can continue them after a restart.
+const SESSION_DIR = path.join(os.homedir(), '.onesun', 'sessions');
+const sessionFile = (dir) => path.join(SESSION_DIR,
+  require('crypto').createHash('sha1').update(dir).digest('hex').slice(0, 16) + '.json');
+function saveSession() {
+  try {
+    const h = agent ? agent.getHistory() : [];
+    if (!h.length) return;
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+    fs.writeFileSync(sessionFile(process.cwd()),
+      JSON.stringify({ cwd: process.cwd(), saved: new Date().toISOString(), history: h }), 'utf8');
+  } catch { /* read-only home: skip */ }
+}
+function loadSession() {
+  try { return JSON.parse(fs.readFileSync(sessionFile(process.cwd()), 'utf8')).history || []; } catch { return []; }
+}
+function deleteSession() { try { fs.unlinkSync(sessionFile(process.cwd())); } catch { /* none */ } }
 
 // Projects folder inside OneSun Code: each user project lives here, and the agent works in it without asking.
 const PROJECTS_DIR = path.join(__dirname, 'projects');
@@ -550,7 +569,7 @@ const ui = {
 
 // ---------- input ----------
 const SLASH = ['/help', '/config', '/settings', '/model', '/provider', '/lang', '/mode', '/clear', '/cwd',
-  '/init', '/commit', '/test', '/desktop', '/open', '/undo', '/copy', '/new', '/projects', '/exit', '/quit'];
+  '/init', '/commit', '/test', '/run', '/resume', '/desktop', '/open', '/undo', '/copy', '/new', '/projects', '/exit', '/quit'];
 
 function separator() {
   const label = ` ${state.cfg.model} · ${modeLabel()} · /help `;
@@ -726,6 +745,7 @@ const CMD_PROMPTS = {
   init: 'Explore this project: read the main files, the folder structure and the package/config files. Then create ONESUN.md in the project root with: a short description of the stack, how to install, run and test the project, and the main conventions. Keep it under 60 lines.',
   commit: 'Check the state with git (git status and git diff). Write a short, clear commit message that describes the changes, then stage and commit them (git add -A, then git commit). Do not push. If there is nothing to commit, say so.',
   test: 'Find out how this project runs its tests (package.json scripts, pytest, go test, etc.), run them and report the results. If something fails, explain why and propose a fix. Do not change code without asking unless the fix is obvious.',
+  run: 'Find out how to start this project (package.json scripts, index.html, requirements.txt, main.py, bot files, etc.). Start it in the background so the terminal stays free: on Windows use "Start-Process" or "start /b", on Linux/macOS use "nohup ... &". Wait a few seconds and check that it responds. Then tell the user the address to open (for example http://localhost:3000) and how to stop it. Do not change code.',
 };
 
 async function handleSlash(text) {
@@ -763,11 +783,30 @@ async function handleSlash(text) {
         state.cfg.model = arg; setConfigValue('MODEL', arg);
         out(`${C.green}  ${t('model.set')}${C.reset} ${arg}\n`); drawHeader();
       } else {
-        out(`\n  ${t('now')} ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
+        // No argument: pick the model from a menu (arrows or number, Enter).
         const list = META[state.cfg.provider]?.models || [];
-        if (list.length) out(`  ${C.gray}${t('model.for', state.cfg.provider, list.join(', '))}${C.reset}\n`);
-        out(`  ${C.gray}${t('model.change')}${C.reset}\n`);
+        if (!list.length) {
+          out(`\n  ${t('now')} ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
+          out(`  ${C.gray}${t('model.change')}${C.reset}\n`);
+          break;
+        }
+        const cur = Math.max(0, list.indexOf(state.cfg.model));
+        const i = await selectMenu(t('model.pick'), t('model.pickhint'), list, cur);
+        state.cfg.model = list[i];
+        setConfigValue('MODEL', list[i]);
+        out(`${C.green}  ${t('model.set')}${C.reset} ${list[i]}\n`);
+        drawHeader();
       }
+      break;
+    case '/resume': {
+      const h = loadSession();
+      if (!h.length) { out(`${C.gray}  ${t('resume.none')}${C.reset}\n`); break; }
+      agent.setHistory(h);
+      out(`${C.green}  ${t('resume.done', h.length)}${C.reset}\n`);
+      break;
+    }
+    case '/run':
+      await runAgent(CMD_PROMPTS.run);
       break;
     case '/provider':
       if (arg && META[arg.toLowerCase()]) {
@@ -792,6 +831,7 @@ async function handleSlash(text) {
     case '/mode': cycleMode(); out(`${C.orange}  ⏵⏵ ${modeLabel()}${C.reset}\n`); break;
     case '/clear':
       agent.clear();
+      deleteSession();
       if (headerOn) { out(`\x1b[${HDR_LINES + 1};1H\x1b[J`); drawHeader(); } else out('\x1b[2J\x1b[3J\x1b[H');
       banner(); break;
     case '/cwd': out(`  ${process.cwd()}\n`); break;
@@ -818,7 +858,7 @@ async function handleSlash(text) {
 async function runAgent(text) {
   attachRunKeys();
   try { await agent.run(text); }
-  finally { spinStop(); detachRunKeys(); }
+  finally { spinStop(); detachRunKeys(); saveSession(); }
 }
 
 // ---------- start ----------
@@ -849,6 +889,11 @@ async function main() {
   if (!headerOn) out('\n');
   banner();
   if (isInProjects(process.cwd())) out(`${C.gray}  ${t('free.note')}${C.reset}\n`);
+  // External tools from mcp.json (next to config.txt).
+  const mcpReport = await loadMcpTools(path.dirname(CONFIG_FILE));
+  for (const r of mcpReport) {
+    out(r.ok ? `${C.gray}  MCP: ${r.name} — ${r.count} tools${C.reset}\n` : `${C.red}  MCP: ${r.name} — ${r.error}${C.reset}\n`);
+  }
 
   let first = args.join(' ').trim();
   while (true) {
