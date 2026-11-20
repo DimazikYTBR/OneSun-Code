@@ -102,7 +102,7 @@ function createAgent({ getConfig, getMode, ui, cwd, free = false }) {
   function needsPermission(name, a) {
     const mode = getMode();
     // The computer itself is never free: Desktop always asks unless in yolo mode.
-    if (name === 'Desktop') return mode !== 'yolo';
+    if (name === 'Desktop' || name.startsWith('mcp__')) return mode !== 'yolo'; // external tools always ask
     if (mode === 'yolo') return false;
     if (free) return false;
     if (name === 'Bash') return true;
@@ -198,6 +198,8 @@ function createAgent({ getConfig, getMode, ui, cwd, free = false }) {
       return '';
     },
     get running() { return running; },
+    getHistory() { return history; },
+    setHistory(h) { history.length = 0; if (Array.isArray(h)) history.push(...h); },
     get historyLength() { return history.length; },
   };
 }
