@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 'use strict';
 // OneSun Code — a terminal AI coding agent (Claude Code-style interface).
@@ -41,8 +42,6 @@ const cols = () => Math.max(40, Math.min(process.stdout.columns || 80, 140));
 const clipTo = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 // ---------- settings (config.txt) ----------
-// The config file is NEVER overwritten: it is created only if it does not exist (COPYFILE_EXCL),
-// and later changes only replace or append single "KEY=value" lines.
 function parseConfig(text) {
   const o = {};
   for (const raw of text.split(/\r?\n/)) {
@@ -74,7 +73,7 @@ function createConfig(lang) {
   try {
     fs.copyFileSync(tpl, CONFIG_FILE, fs.constants.COPYFILE_EXCL);
   } catch (e) {
-    if (e.code === 'EEXIST') return; // already there: leave it alone
+    if (e.code === 'EEXIST') return;
     try { fs.writeFileSync(CONFIG_FILE, DEFAULT_CONFIG, { flag: 'wx' }); } catch { /* exists or read-only */ }
   }
   setConfigValue('LANG', lang);
@@ -107,9 +106,9 @@ function openInEditor(file) {
     if (process.platform === 'win32') child = spawn('notepad.exe', [file], { detached: true, stdio: 'ignore' });
     else if (process.platform === 'darwin') child = spawn('open', ['-t', file], { detached: true, stdio: 'ignore' });
     else child = spawn('xdg-open', [file], { detached: true, stdio: 'ignore' });
-    child.on('error', () => { /* no editor found — the file path is already printed */ });
+    child.on('error', () => {});
     child.unref();
-  } catch { /* ignore */ }
+  } catch {}
 }
 
 function waitEnter(msg) {
@@ -159,7 +158,6 @@ async function chooseLanguage(def) {
   return LANGS[idx];
 }
 
-// Language is asked once. If the config already exists, it is kept as is: only the LANG line is appended.
 async function ensureLanguage() {
   const exists = fs.existsSync(CONFIG_FILE);
   const raw = exists ? parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8')) : {};
@@ -189,15 +187,13 @@ async function ensureConfig() {
 
 // ---------- state ----------
 const state = { cfg: null, mode: 'ask' };
-// Input history is kept between launches in the home folder (not in the project, not in config.txt).
 const HIST_FILE = path.join(os.homedir(), '.onesun_history');
 const hist = (() => {
   try { return JSON.parse(fs.readFileSync(HIST_FILE, 'utf8')).filter((x) => typeof x === 'string').slice(0, 200); }
   catch { return []; }
 })();
-function saveHist() { try { fs.writeFileSync(HIST_FILE, JSON.stringify(hist.slice(0, 200)), 'utf8'); } catch { /* read-only home: skip */ } }
+function saveHist() { try { fs.writeFileSync(HIST_FILE, JSON.stringify(hist.slice(0, 200)), 'utf8'); } catch {} }
 
-// Conversations are saved per folder, so /resume can continue them after a restart.
 const SESSION_DIR = path.join(os.homedir(), '.onesun', 'sessions');
 const sessionFile = (dir) => path.join(SESSION_DIR,
   require('crypto').createHash('sha1').update(dir).digest('hex').slice(0, 16) + '.json');
@@ -208,183 +204,16 @@ function saveSession() {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
     fs.writeFileSync(sessionFile(process.cwd()),
       JSON.stringify({ cwd: process.cwd(), saved: new Date().toISOString(), history: h }), 'utf8');
-  } catch { /* read-only home: skip */ }
+  } catch {}
 }
 function loadSession() {
   try { return JSON.parse(fs.readFileSync(sessionFile(process.cwd()), 'utf8')).history || []; } catch { return []; }
 }
-function deleteSession() { try { fs.unlinkSync(sessionFile(process.cwd())); } catch { /* none */ } }
+function deleteSession() { try { fs.unlinkSync(sessionFile(process.cwd())); } catch {} }
 
-
-const PASTE_START = '\x1b[200~';
-const PASTE_END = '\x1b[201~';
-
-function readPrompt(prompt) {
-  const input = process.stdin;
-  const output = process.stdout;
-
-  // Запасной режим, если терминал не поддерживает raw input.
-  if (!input.isTTY || typeof input.setRawMode !== 'function') {
-    return new Promise(resolve => {
-      const rl = readline.createInterface({
-        input,
-        output
-      });
-
-      rl.question(prompt, answer => {
-        rl.close();
-        resolve(answer);
-      });
-    });
-  }
-
-  return new Promise(resolve => {
-    let buffer = '';
-    let pending = '';
-    let pasting = false;
-    let finished = false;
-
-    const oldRawMode = input.isRaw;
-
-    function render() {
-      output.write('\r\x1b[2K');
-      output.write(prompt + buffer);
-    }
-
-    function insert(text) {
-      buffer += text;
-      output.write(text);
-    }
-
-    function finish(value) {
-      if (finished) return;
-      finished = true;
-
-      output.write('\r\n');
-      output.write('\x1b[?2004l');
-
-      input.removeListener('data', onData);
-
-      try {
-        input.setRawMode(Boolean(oldRawMode));
-      } catch {}
-
-      resolve(value);
-    }
-
-    function processPending() {
-      while (pending.length > 0) {
-        if (pasting) {
-          const end = pending.indexOf(PASTE_END);
-
-          if (end === -1) {
-            const keep = PASTE_END.length - 1;
-
-            if (pending.length > keep) {
-              const part = pending.slice(0, -keep);
-              pending = pending.slice(-keep);
-              insert(part.replace(/\r\n?/g, '\n'));
-            }
-
-            return;
-          }
-
-          const pasted = pending.slice(0, end);
-          pending = pending.slice(end + PASTE_END.length);
-
-          insert(pasted.replace(/\r\n?/g, '\n'));
-          pasting = false;
-          continue;
-        }
-
-        if (pending.startsWith(PASTE_START)) {
-          pending = pending.slice(PASTE_START.length);
-          pasting = true;
-          continue;
-        }
-
-        if (PASTE_START.startsWith(pending)) {
-          return;
-        }
-
-        // Стрелки и другие ANSI-последовательности.
-        if (pending[0] === '\x1b') {
-          if (pending.length === 1) return;
-
-          const match = pending.match(
-            /^\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))/
-          );
-
-          if (match) {
-            pending = pending.slice(match[0].length);
-            continue;
-          }
-
-          if (pending.length < 16) return;
-
-          pending = pending.slice(1);
-          continue;
-        }
-
-        const char = String.fromCodePoint(pending.codePointAt(0));
-        pending = pending.slice(char.length);
-
-        // Ctrl+C
-        if (char === '\x03') {
-          finish(null);
-          return;
-        }
-
-        // Ctrl+D
-        if (char === '\x04' && !buffer) {
-          finish(null);
-          return;
-        }
-
-        // Enter
-        if (char === '\r' || char === '\n') {
-          finish(buffer);
-          return;
-        }
-
-        // Backspace
-        if (char === '\x7f' || char === '\b') {
-          if (buffer.length > 0) {
-            buffer = Array.from(buffer).slice(0, -1).join('');
-            render();
-          }
-          continue;
-        }
-
-        // Игнорируем остальные управляющие символы.
-        if (char.charCodeAt(0) < 32) continue;
-
-        insert(char);
-      }
-    }
-
-    function onData(chunk) {
-      pending += chunk.toString('utf8');
-      processPending();
-    }
-
-    try {
-      input.setRawMode(true);
-      input.resume();
-
-      output.write('\x1b[?2004h');
-      output.write(prompt);
-
-      input.on('data', onData);
-    } catch (error) {
-      finish(null);
-    }
-  });
-}
-
-// Projects folder inside OneSun Code: each user project lives here, and the agent works in it without asking.
+// Projects folder inside OneSun Code.
 const PROJECTS_DIR = path.join(__dirname, 'projects');
-try { fs.mkdirSync(PROJECTS_DIR, { recursive: true }); } catch { /* read-only install: skip */ }
+try { fs.mkdirSync(PROJECTS_DIR, { recursive: true }); } catch {}
 function isInProjects(dir) {
   const r = path.relative(PROJECTS_DIR, dir);
   return !r.startsWith('..') && !path.isAbsolute(r);
@@ -402,8 +231,7 @@ function box(lines) {
   out(C.orange + S.bl + S.h.repeat(w) + S.br + C.reset + '\n');
 }
 
-// ---------- pinned header (logo and name) ----------
-// OneSun logo: a ring with a diagonal cut, drawn with block characters (one character = 2 pixels vertically).
+// ---------- pinned header ----------
 const LOGO = [
   '   ▄████▄▄  ',
   ' ██▄    ▀██ ',
@@ -413,7 +241,7 @@ const LOGO = [
   '  ▀▀████▀▀  ',
 ];
 const LOGO_ASCII = LOGO.map((l) => l.replace(/█/g, '#').replace(/▀/g, '"').replace(/▄/g, ','));
-const HDR_LINES = LOGO.length + 1; // logo + divider
+const HDR_LINES = LOGO.length + 1;
 const HDR_MIN_ROWS = 18;
 let headerOn = false;
 
@@ -443,7 +271,7 @@ function enableHeader() {
   if (state.cfg.header === false || rows < HDR_MIN_ROWS || cols() < 50) return;
   headerOn = true;
   out('\x1b[2J');
-  out(`\x1b[${HDR_LINES + 1};${rows}r`); // only the area below the header scrolls
+  out(`\x1b[${HDR_LINES + 1};${rows}r`);
   out(`\x1b[${HDR_LINES + 1};1H`);
   drawHeader();
 }
@@ -488,11 +316,11 @@ function printHelp() {
   out(`  ${C.gray}${t('help.md')}${C.reset}\n`);
 }
 
-// ---------- "thinking" indicator: shimmering text + rotating phrases ----------
+// ---------- thinking indicator ----------
 const TRUECOLOR = /truecolor|24bit/i.test(process.env.COLORTERM || '') || !!process.env.WT_SESSION || process.env.TERM_PROGRAM === 'vscode';
-const WAVE256 = [231, 195, 153, 117, 75, 33]; // white -> blue for 256-color terminals
+const WAVE256 = [231, 195, 153, 117, 75, 33];
 
-function waveColor(k) { // k: 0 = white, 1 = blue
+function waveColor(k) {
   if (!useColor) return '';
   if (TRUECOLOR) {
     const r = Math.round(255 + (60 - 255) * k);
@@ -502,7 +330,6 @@ function waveColor(k) { // k: 0 = white, 1 = blue
   return `\x1b[1;38;5;${WAVE256[Math.round(k * (WAVE256.length - 1))]}m`;
 }
 
-// White text with a blue wave running through it (like the shimmer in Claude Code).
 function shimmer(text, ms) {
   if (!useColor) return text;
   const chars = [...text];
@@ -552,7 +379,7 @@ function spinStop() {
   spin.on = false;
   out('\r\x1b[2K\x1b[?25h');
 }
-process.on('exit', () => { try { if (process.stdout.isTTY) { out('\x1b[?25h'); disableHeader(); } } catch { /* ignore */ } });
+process.on('exit', () => { try { if (process.stdout.isTTY) { out('\x1b[?25h'); disableHeader(); } } catch {} });
 
 // ---------- streaming markdown ----------
 class MdStream {
@@ -615,7 +442,7 @@ class MdStream {
   endLine() {
     if (this.mode === 'text' && this.pend) this.w('*');
     this.pend = false;
-    this.w(this.mode === 'skip' ? C.reset : C.reset + '\n'); // a ``` line prints nothing
+    this.w(this.mode === 'skip' ? C.reset : C.reset + '\n');
     this.mode = null; this.buf = ''; this.inl = false; this.bold = false;
   }
   flush() {
@@ -745,6 +572,67 @@ function separator() {
 }
 
 let lastSigint = 0;
+
+// Read the system clipboard. Returns null if the clipboard tool is unavailable.
+function readClipboard() {
+  return new Promise((resolve) => {
+    let command;
+    let args = [];
+
+    if (process.platform === 'win32') {
+      command = 'powershell.exe';
+      args = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-Clipboard -Raw'
+      ];
+    } else if (process.platform === 'darwin') {
+      command = 'pbpaste';
+    } else if (process.env.TERMUX_VERSION) {
+      command = 'termux-clipboard-get';
+    } else if (process.env.WAYLAND_DISPLAY) {
+      command = 'wl-paste';
+      args = ['--no-newline'];
+    } else {
+      command = 'xclip';
+      args = ['-selection', 'clipboard', '-o'];
+    }
+
+    let child;
+    try {
+      child = spawn(command, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+
+    let result = '';
+    let failed = false;
+
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      result += chunk;
+    });
+
+    child.on('error', () => {
+      failed = true;
+      resolve(null);
+    });
+
+    child.on('close', (code) => {
+      if (failed || code !== 0) {
+        resolve(null);
+        return;
+      }
+      resolve(result);
+    });
+  });
+}
+
 function readInput() {
   return new Promise((resolve) => {
     const rl = readline.createInterface({
@@ -754,9 +642,9 @@ function readInput() {
     });
     const parts = [];
     let timer = null, done = false;
-    let voice = null; // active voice recording (Ctrl+G)
+    let voice = null;
     let voiceAnim = null, voiceBusy = false;
-    // Animated status line shown in place of the prompt while recording or transcribing.
+
     const voiceShow = (label) => {
       const t0 = Date.now();
       const draw = () => {
@@ -767,44 +655,85 @@ function readInput() {
       draw();
       voiceAnim = setInterval(draw, 70);
     };
-    const voiceHide = () => { clearInterval(voiceAnim); voiceAnim = null; out('\r\x1b[2K'); };
+
+    const voiceHide = () => {
+      clearInterval(voiceAnim);
+      voiceAnim = null;
+      out('\r\x1b[2K');
+    };
+
     const finish = () => {
+      if (done) return;
       done = true;
+      clearTimeout(timer);
       voiceHide();
+
       if (voice && !voice.oneShot) voice.cancel();
+
+      // readline keeps the unfinished part of the input in rl.line.
+      // This is important when pasted text does not end with Enter.
+      const current = rl.line || '';
+      const result = [...parts];
+
+      if (current) result.push(current);
+
       process.stdin.off('keypress', onKey);
       rl.close();
-      resolve(parts.join('\n'));
+      resolve(result.join('\n'));
     };
-    // Ctrl+G: start recording. Enter then stops, recognizes and sends. Ctrl+G again cancels.
+
     const voiceStart = () => {
       if (voice) return;
       const v = startVoice(state.cfg);
-      if (!v) { out(`${C.gray}  ${t('voice.none')}${C.reset}\n`); return; }
+      if (!v) {
+        out(`${C.gray}  ${t('voice.none')}${C.reset}\n`);
+        return;
+      }
+
       voice = v;
       voiceShow(t('voice.listening'));
+
       if (v.oneShot) {
         v.done.then((txt) => {
           if (done) return;
           voice = null;
           voiceHide();
-          if (txt) rl.write(txt); else out(`${C.gray}  ${t('voice.empty')}${C.reset}\n`);
+          if (txt) rl.write(txt);
+          else out(`${C.gray}  ${t('voice.empty')}${C.reset}\n`);
           rl.prompt(true);
         });
       }
     };
+
     const voiceCancel = () => {
       voice.cancel();
       voice = null;
       voiceHide();
       rl.prompt(true);
     };
+
     const onKey = (s, key) => {
+      // Ctrl+V: insert clipboard contents into the current readline input.
+      if (key && key.ctrl && key.name === 'v') {
+        readClipboard().then((text) => {
+          if (done || text === null || !text.length) return;
+
+          rl.write(text);
+
+          // readline emits "line" events for pasted newlines.
+          // Give it a moment to process all lines before finishing.
+          clearTimeout(timer);
+          timer = setTimeout(finish, 80);
+        });
+        return;
+      }
+
       if (key && key.ctrl && key.name === 'g') {
         if (voice && !voice.oneShot) voiceCancel();
         else voiceStart();
         return;
       }
+
       if (key && key.name === 'tab' && key.shift) {
         cycleMode();
         out('\r\x1b[2K');
@@ -812,9 +741,10 @@ function readInput() {
         rl.prompt(true);
       }
     };
+
     process.stdin.on('keypress', onKey);
+
     rl.on('line', async (l) => {
-      // Enter while recording: stop, recognize, and send the speech right away.
       if (voice && !voice.oneShot) {
         if (voiceBusy) return;
         voiceBusy = true;
@@ -824,26 +754,50 @@ function readInput() {
         voiceHide();
         voiceBusy = false;
         voice = null;
+
         if (done) return;
-        if (!res.text) { out(`${C.red}  ${t('voice.fail', res.error || t('voice.empty'))}${C.reset}\n`); rl.prompt(true); return; }
-        // The speech goes into the input line: you can edit or delete it, and Enter sends it.
+
+        if (!res.text) {
+          out(`${C.red}  ${t('voice.fail', res.error || t('voice.empty'))}${C.reset}\n`);
+          rl.prompt(true);
+          return;
+        }
+
         rl.prompt(true);
         rl.write([res.text, l].filter(Boolean).join(' '));
         return;
       }
-      if (l.endsWith('\\')) { parts.push(l.slice(0, -1)); rl.setPrompt(`${C.gray}…${C.reset} `); rl.prompt(); return; }
+
+      if (l.endsWith('\\')) {
+        parts.push(l.slice(0, -1));
+        rl.setPrompt(`${C.gray}…${C.reset} `);
+        rl.prompt();
+        return;
+      }
+
       parts.push(l);
       clearTimeout(timer);
-      timer = setTimeout(finish, 35); // glue together pasted multi-line text
+      timer = setTimeout(finish, 35);
     });
+
     rl.on('SIGINT', () => {
-      if (rl.line && rl.line.length) { rl.write(null, { ctrl: true, name: 'u' }); return; }
-      if (Date.now() - lastSigint < 2000) { bye(); return; }
+      if (rl.line && rl.line.length) {
+        rl.write(null, { ctrl: true, name: 'u' });
+        return;
+      }
+      if (Date.now() - lastSigint < 2000) {
+        bye();
+        return;
+      }
       lastSigint = Date.now();
       out(`\n${C.gray}  ${t('ctrlc')}${C.reset}\n`);
       rl.prompt(true);
     });
-    rl.on('close', () => { if (!done) bye(); });
+
+    rl.on('close', () => {
+      if (!done) bye();
+    });
+
     separator();
     rl.prompt();
   });
@@ -861,13 +815,16 @@ async function editConfig() {
   await waitEnter(`${C.gray}  ${t('cfg.apply')}${C.reset}`);
   const cfg = loadConfig();
   const miss = missingFields(cfg);
-  if (miss.length) { out(`${C.red}  ${t('cfg.still')} ${miss.join(', ')}${C.reset}\n`); return; }
+  if (miss.length) {
+    out(`${C.red}  ${t('cfg.still')} ${miss.join(', ')}${C.reset}\n`);
+    return;
+  }
   state.cfg = cfg;
   if (cfg.lang) setLang(cfg.lang);
-  out(`${C.green}  ${t('cfg.applied')}${C.reset} ${cfg.provider} · ${cfg.model}\n`); drawHeader();
+  out(`${C.green}  ${t('cfg.applied')}${C.reset} ${cfg.provider} · ${cfg.model}\n`);
+  drawHeader();
 }
 
-// Copies text to the system clipboard using the tool that exists on this system.
 function copyToClipboard(text) {
   return new Promise((resolve) => {
     let child;
@@ -878,32 +835,37 @@ function copyToClipboard(text) {
       } else if (process.platform === 'darwin') child = spawn('pbcopy', [], { stdio: ['pipe', 'ignore', 'ignore'] });
       else if (process.env.TERMUX_VERSION) child = spawn('termux-clipboard-set', [], { stdio: ['pipe', 'ignore', 'ignore'] });
       else child = spawn('xclip', ['-selection', 'clipboard'], { stdio: ['pipe', 'ignore', 'ignore'] });
-    } catch { return resolve(false); }
+    } catch {
+      return resolve(false);
+    }
     child.on('error', () => resolve(false));
     child.on('close', (code) => resolve(code === 0));
-    child.stdin.on('error', () => { /* tool exited early */ });
+    child.stdin.on('error', () => {});
     child.stdin.end(text, 'utf8');
   });
 }
 
-// Adds the content of files mentioned as @path (e.g. "fix @src/app.js"). Only real text files under 200 KB.
 function expandMentions(text) {
   const cwd = process.cwd();
   const added = [];
   let extra = '';
+
   for (const m of text.matchAll(/(?:^|\s)@([^\s]+)/g)) {
     const rel = m[1];
     if (added.includes(rel)) continue;
+
     try {
       const p = path.resolve(cwd, rel);
       const st = fs.statSync(p);
       if (!st.isFile() || st.size > 200 * 1024) continue;
       const buf = fs.readFileSync(p);
       if (buf.includes(0)) continue;
+
       added.push(rel);
       extra += `\n\n[File: ${rel}]\n\`\`\`\n${buf.toString('utf8')}\n\`\`\``;
-    } catch { /* not a file: keep it as plain text */ }
+    } catch {}
   }
+
   added.forEach((f) => out(`${C.gray}  + ${f}${C.reset}\n`));
   return text + extra;
 }
@@ -918,39 +880,61 @@ const CMD_PROMPTS = {
 async function handleSlash(text) {
   const [cmd, ...rest] = text.split(/\s+/);
   const arg = rest.join(' ').trim();
+
   switch (cmd) {
-    case '/': case '/help': printHelp(); break;
+    case '/': case '/help':
+      printHelp();
+      break;
+
     case '/open': {
-      if (!arg) { out(`${C.gray}  ${t('open.usage')}${C.reset}\n`); break; }
-      // Opened directly by you, so no model call and no permission question.
+      if (!arg) {
+        out(`${C.gray}  ${t('open.usage')}${C.reset}\n`);
+        break;
+      }
       const r = await IMPL.Desktop({ action: 'open', target: arg }, { cwd: process.cwd() });
       out(r.isError ? `${C.red}  ${r.preview}${C.reset}\n` : `${C.green}  ${r.preview}${C.reset}\n`);
       break;
     }
+
     case '/init': case '/commit': case '/test':
-      await runAgent(CMD_PROMPTS[cmd.slice(1)]); break;
+      await runAgent(CMD_PROMPTS[cmd.slice(1)]);
+      break;
+
     case '/desktop':
-      if (!arg) { out(`${C.gray}  ${t('desk.usage')}${C.reset}\n`); break; }
+      if (!arg) {
+        out(`${C.gray}  ${t('desk.usage')}${C.reset}\n`);
+        break;
+      }
       await runAgent(`Use the Desktop tool to do this on the user's computer: ${arg}. Take one step at a time and check the result of each step before the next.`);
       break;
+
     case '/undo': {
       const p = undoLast();
       out(p ? `${C.green}  ${t('undo.done', path.relative(process.cwd(), p) || p)}${C.reset}\n` : `${C.gray}  ${t('undo.none')}${C.reset}\n`);
       break;
     }
+
     case '/copy': {
       const last = agent.lastText();
-      if (!last) { out(`${C.gray}  ${t('copy.none')}${C.reset}\n`); break; }
+      if (!last) {
+        out(`${C.gray}  ${t('copy.none')}${C.reset}\n`);
+        break;
+      }
       out(`${(await copyToClipboard(last)) ? C.green + '  ' + t('copy.done') : C.red + '  ' + t('copy.fail')}${C.reset}\n`);
       break;
     }
-    case '/config': case '/settings': case '/key': await editConfig(); break;
+
+    case '/config': case '/settings': case '/key':
+      await editConfig();
+      break;
+
     case '/model':
       if (arg) {
-        state.cfg.model = arg; setConfigValue('MODEL', arg);
-        out(`${C.green}  ${t('model.set')}${C.reset} ${arg}\n`); drawHeader();
+        state.cfg.model = arg;
+        setConfigValue('MODEL', arg);
+        out(`${C.green}  ${t('model.set')}${C.reset} ${arg}\n`);
+        drawHeader();
       } else {
-        // No argument: pick the model from a menu (arrows or number, Enter).
         const list = META[state.cfg.provider]?.models || [];
         if (!list.length) {
           out(`\n  ${t('now')} ${C.orange}${state.cfg.provider} · ${state.cfg.model}${C.reset}\n`);
@@ -965,23 +949,31 @@ async function handleSlash(text) {
         drawHeader();
       }
       break;
+
     case '/resume': {
       const h = loadSession();
-      if (!h.length) { out(`${C.gray}  ${t('resume.none')}${C.reset}\n`); break; }
+      if (!h.length) {
+        out(`${C.gray}  ${t('resume.none')}${C.reset}\n`);
+        break;
+      }
       agent.setHistory(h);
       out(`${C.green}  ${t('resume.done', h.length)}${C.reset}\n`);
       break;
     }
+
     case '/run':
       await runAgent(CMD_PROMPTS.run);
       break;
+
     case '/provider':
       if (arg && META[arg.toLowerCase()]) {
         const p = arg.toLowerCase();
         setConfigValue('PROVIDER', p);
         const cfg = loadConfig();
         state.cfg = cfg;
-        out(`${C.green}  ${t('prov.set')}${C.reset} ${p}\n`); drawHeader();
+        out(`${C.green}  ${t('prov.set')}${C.reset} ${p}\n`);
+        drawHeader();
+
         const miss = missingFields(cfg);
         if (miss.length) out(`${C.orange}  ${t('prov.missing', miss.join(', '))}${C.reset}\n`);
         else if (!META[p].models.includes(cfg.model)) out(`${C.gray}  ${t('prov.mismatch', cfg.model, META[p].models.join(', '))}${C.reset}\n`);
@@ -989,21 +981,42 @@ async function handleSlash(text) {
         out(`\n  ${t('now')} ${C.orange}${state.cfg.provider}${C.reset}\n  ${C.gray}${t('prov.avail', Object.keys(META).join(', '))}\n  ${t('prov.change')}${C.reset}\n`);
       }
       break;
+
     case '/lang': {
       const lang = await chooseLanguage(getLang());
-      setLang(lang); state.cfg.lang = lang; setConfigValue('LANG', lang);
+      setLang(lang);
+      state.cfg.lang = lang;
+      setConfigValue('LANG', lang);
       out(`${C.green}  ${t('lang.set', t('lang.short')[lang])}${C.reset}\n`);
       break;
     }
-    case '/mode': cycleMode(); out(`${C.orange}  ⏵⏵ ${modeLabel()}${C.reset}\n`); break;
+
+    case '/mode':
+      cycleMode();
+      out(`${C.orange}  ⏵⏵ ${modeLabel()}${C.reset}\n`);
+      break;
+
     case '/clear':
       agent.clear();
       deleteSession();
-      if (headerOn) { out(`\x1b[${HDR_LINES + 1};1H\x1b[J`); drawHeader(); } else out('\x1b[2J\x1b[3J\x1b[H');
-      banner(); break;
-    case '/cwd': out(`  ${process.cwd()}\n`); break;
+      if (headerOn) {
+        out(`\x1b[${HDR_LINES + 1};1H\x1b[J`);
+        drawHeader();
+      } else {
+        out('\x1b[2J\x1b[3J\x1b[H');
+      }
+      banner();
+      break;
+
+    case '/cwd':
+      out(`  ${process.cwd()}\n`);
+      break;
+
     case '/new': {
-      if (!/^[\p{L}\p{N}][\p{L}\p{N} _.-]{0,59}$/u.test(arg)) { out(`${C.gray}  ${t('new.usage')}${C.reset}\n`); break; }
+      if (!/^[\p{L}\p{N}][\p{L}\p{N} _.-]{0,59}$/u.test(arg)) {
+        out(`${C.gray}  ${t('new.usage')}${C.reset}\n`);
+        break;
+      }
       const dir = path.join(PROJECTS_DIR, arg);
       fs.mkdirSync(dir, { recursive: true });
       process.chdir(dir);
@@ -1011,37 +1024,65 @@ async function handleSlash(text) {
       out(`${C.green}  ${t('new.done', arg)}${C.reset}\n${C.gray}  ${t('free.note')}${C.reset}\n`);
       break;
     }
+
     case '/projects': {
       let names = [];
-      try { names = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); } catch { /* none */ }
+      try {
+        names = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name);
+      } catch {}
       out(names.length ? names.map((n) => `  ${n}`).join('\n') + '\n' : `${C.gray}  ${t('projects.none')}${C.reset}\n`);
       break;
     }
-    case '/exit': case '/quit': bye(); break;
-    default: out(`${C.red}  ${t('cmd.unknown', cmd)}${C.reset} ${C.gray}${t('cmd.unknownHint')}${C.reset}\n`);
+
+    case '/exit': case '/quit':
+      bye();
+      break;
+
+    default:
+      out(`${C.red}  ${t('cmd.unknown', cmd)}${C.reset} ${C.gray}${t('cmd.unknownHint')}${C.reset}\n`);
   }
 }
 
 async function runAgent(text) {
   attachRunKeys();
-  try { await agent.run(text); }
-  finally { spinStop(); detachRunKeys(); saveSession(); }
+  try {
+    await agent.run(text);
+  } finally {
+    spinStop();
+    detachRunKeys();
+    saveSession();
+  }
 }
 
 // ---------- start ----------
 async function main() {
   const args = process.argv.slice(2);
-  // language for --help / errors before the interactive start (the config is only read, never changed)
-  try { setLang(normLang(parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8')).LANG) || 'en'); } catch { setLang('en'); }
 
-  if (args[0] === '--help' || args[0] === '-h') { console.log(t('cli.help', pkg.version, CONFIG_FILE)); return; }
-  if (args[0] === '--version' || args[0] === '-v') { console.log(pkg.version); return; }
+  try {
+    setLang(normLang(parseConfig(fs.readFileSync(CONFIG_FILE, 'utf8')).LANG) || 'en');
+  } catch {
+    setLang('en');
+  }
+
+  if (args[0] === '--help' || args[0] === '-h') {
+    console.log(t('cli.help', pkg.version, CONFIG_FILE));
+    return;
+  }
+
+  if (args[0] === '--version' || args[0] === '-v') {
+    console.log(pkg.version);
+    return;
+  }
+
   if (args[0] === '--config') {
     if (!fs.existsSync(CONFIG_FILE)) createConfig('en');
     openInEditor(CONFIG_FILE);
     console.log(t('cli.opened', CONFIG_FILE));
     return;
   }
+
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.error(t('cli.notty'));
     process.exit(1);
@@ -1055,25 +1096,49 @@ async function main() {
   enableHeader();
   if (!headerOn) out('\n');
   banner();
-  if (isInProjects(process.cwd())) out(`${C.gray}  ${t('free.note')}${C.reset}\n`);
-  // External tools from mcp.json (next to config.txt).
+
+  if (isInProjects(process.cwd())) {
+    out(`${C.gray}  ${t('free.note')}${C.reset}\n`);
+  }
+
   const mcpReport = await loadMcpTools(path.dirname(CONFIG_FILE));
   for (const r of mcpReport) {
-    out(r.ok ? `${C.gray}  MCP: ${r.name} — ${r.count} tools${C.reset}\n` : `${C.red}  MCP: ${r.name} — ${r.error}${C.reset}\n`);
+    out(r.ok
+      ? `${C.gray}  MCP: ${r.name} — ${r.count} tools${C.reset}\n`
+      : `${C.red}  MCP: ${r.name} — ${r.error}${C.reset}\n`);
   }
 
   let first = args.join(' ').trim();
+
   while (true) {
     let text;
-    if (first) { text = first; first = ''; out(`\n${C.orange}>${C.reset} ${text}\n`); }
-    else text = (await readInput()).trim();
+
+    if (first) {
+      text = first;
+      first = '';
+      out(`\n${C.orange}>${C.reset} ${text}\n`);
+    } else {
+      text = (await readInput()).trim();
+    }
+
     if (!text) continue;
+
     if (hist[0] !== text) hist.unshift(text);
     saveHist();
-    if (text.startsWith('/')) { await handleSlash(text); continue; }
+
+    if (text.startsWith('/')) {
+      await handleSlash(text);
+      continue;
+    }
+
     if (text === 'exit' || text === 'quit') bye();
+
     await runAgent(expandMentions(text));
   }
 }
 
-main().catch((e) => { spinStop(); console.error('\n' + C.red + t('cli.fatal') + (e && e.stack || e) + C.reset); process.exit(1); });
+main().catch((e) => {
+  spinStop();
+  console.error('\n' + C.red + t('cli.fatal') + (e && e.stack || e) + C.reset);
+  process.exit(1);
+});
